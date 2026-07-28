@@ -241,16 +241,15 @@
         await waitForIce(peerConnection);
 
         const response = await fetch(
-          "/api/realtime",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/sdp"
-            },
-            body:
-              peerConnection.localDescription.sdp
-          }
-        );
+  "/api/realtime",
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8"
+    },
+    body: peerConnection.localDescription.sdp
+  }
+);
 
         if (!response.ok) {
           throw new Error(await response.text());
