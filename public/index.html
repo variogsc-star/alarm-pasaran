@@ -264,14 +264,17 @@
         });
 
       } catch (error) {
-        console.error(error);
+    console.error("Gagal memulai asisten:", error);
 
-        setStatus(
-          microphoneError(error),
-          "error"
+    const errorMessage =
+    microphoneError(error);
+
+    stopAssistant();
+
+    setStatus(
+      errorMessage,
+      "error"
         );
-
-        stopAssistant();
       }
     }
 
