@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+  <title>AI Alarm Suara</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: #f3f4f6;
+      color: #111827;
+      font-family: Arial, sans-serif;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 560px;
+      padding: 22px;
+      border-radius: 18px;
+      background: #ffffff;
+      box-shadow: 0 12px 35px rgba(0,0,0,.1);
+    }
+
+    h1 { margin: 0 0 8px; }
+
+    .description {
+      color: #6b7280;
+      line-height: 1.5;
+    }
+
+    #status {
+      margin: 18px 0;
+      min-height: 62px;
+      padding: 14px;
+      border-radius: 12px;
+      background: #eef2ff;
+      line-height: 1.5;
+    }
+
+    #status.error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    #status.success {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .buttons {
+      display: grid;
+      gap: 10px;
+    }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 15px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #startButton {
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    #stopButton {
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    #details,
+    #transcript {
+      margin-top: 14px;
+      color: #4b5563;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <h1>AI Alarm Suara</h1>
+
+    <div class="description">
+      Tekan mulai sekali, izinkan mikrofon, lalu biarkan halaman tetap terbuka.
+    </div>
+
+    <div id="status">Belum terhubung.</div>
+
+    <div class="buttons">
+      <button id="startButton">Mulai Asisten</button>
+      <button id="stopButton" disabled>Hentikan</button>
+    </div>
+
+    <audio id="remoteAudio" autoplay></audio>
+
+    <div id="details"></div>
+    <div id="transcript"></div>
+  </main>
+
+  <script>
+    const POLL_MS = 20000;
+
+    const startButton =
+      document.getElementById("startButton");
+    const stopButton =
+      document.getElementById("stopButton");
+    const statusBox =
+      document.getElementById("status");
+    const detailsBox =
+      document.getElementById("details");
+    const transcriptBox =
+      document.getElementById("transcript");
+    const remoteAudio =
+      document.getElementById("remoteAudio");
+
+    let running = false;
+    let peerConnection = null;
+    let dataChannel = null;
+    let localStream = null;
+    let pollTimer = null;
+    let activeReminder = null;
+
+    startButton.addEventListener(
+      "click",
+      startAssistant
+    );
+
+    stopButton.addEventListener(
+      "click",
+      stopAssistant
+    );
+
+    async function startAssistant() {
+      if (running) return;
+
+      startButton.disabled = true;
+      setStatus("Meminta izin mikrofon...");
+
+      try {
+        localStream =
+          await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+
+        peerConnection =
+          new RTCPeerConnection();
+
+        peerConnection.ontrack =
+          function(event) {
+            remoteAudio.srcObject =
+              event.streams[0];
+          };
+
+        peerConnection.onconnectionstatechange =
+          function() {
+            const state =
+              peerConnection.connectionState;
+
+            if (state === "connected") {
+              running = true;
+              startButton.disabled = true;
+              stopButton.disabled = false;
+
+              setStatus(
+                "Asisten aktif. Menunggu jadwal.",
+                "success"
+              );
+
+              speakExact(
+                "Asisten alarm sudah aktif."
+              );
+
+              pollReminder();
+            }
+
+            if (
+              state === "failed" ||
+              state === "disconnected"
+            ) {
+              setStatus(
+                "Koneksi Realtime terputus.",
+                "error"
+              );
+            }
+          };
+
+        localStream
+          .getTracks()
+          .forEach(function(track) {
+            peerConnection.addTrack(
+              track,
+              localStream
+            );
+          });
+
+        dataChannel =
+          peerConnection.createDataChannel(
+            "oai-events"
+          );
+
+        setupDataChannel();
+
+        const offer =
+          await peerConnection.createOffer();
+
+        await peerConnection.setLocalDescription(
+          offer
+        );
+
+        await waitForIce(peerConnection);
+
+        const response = await fetch(
+          "/api/realtime",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/sdp"
+            },
+            body:
+              peerConnection.localDescription.sdp
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+
+        const answer = await response.text();
+
+        await peerConnection.setRemoteDescription({
+          type: "answer",
+          sdp: answer
+        });
+
+      } catch (error) {
+        console.error(error);
+
+        setStatus(
+          microphoneError(error),
+          "error"
+        );
+
+        stopAssistant();
+      }
+    }
+
+    function setupDataChannel() {
+      dataChannel.onopen = function() {
+        detailsBox.textContent =
+          "Saluran OpenAI terhubung.";
+      };
+
+      dataChannel.onmessage =
+        function(event) {
+          try {
+            handleRealtimeEvent(
+              JSON.parse(event.data)
+            );
+          } catch (error) {
+            console.error(error);
+          }
+        };
+    }
+
+    function handleRealtimeEvent(event) {
+      if (
+        event.type ===
+        "conversation.item.input_audio_transcription.completed"
+      ) {
+        const transcript =
+          String(event.transcript || "").trim();
+
+        transcriptBox.textContent =
+          "Kamu: " + transcript;
+
+        if (activeReminder && transcript) {
+          submitReminderAnswer(transcript);
+        }
+      }
+
+      if (
+        event.type ===
+        "response.output_audio_transcript.done"
+      ) {
+        transcriptBox.textContent +=
+          "\nAI: " +
+          String(event.transcript || "");
+      }
+
+      if (event.type === "error") {
+        setStatus(
+          event.error && event.error.message
+            ? event.error.message
+            : "Terjadi kesalahan Realtime.",
+          "error"
+        );
+      }
+    }
+
+    async function pollReminder() {
+      if (!running) return;
+
+      try {
+        const response = await fetch(
+          "/api/reminder?action=next",
+          { cache: "no-store" }
+        );
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(
+            data.error || "Gagal membaca jadwal."
+          );
+        }
+
+        if (data.reminder && !activeReminder) {
+          activeReminder = data.reminder;
+
+          detailsBox.textContent =
+            "Alarm aktif: " +
+            activeReminder.name +
+            " • " +
+            activeReminder.time +
+            " • tahap " +
+            activeReminder.stage;
+
+          setStatus("Alarm sedang dibacakan.");
+
+          speakExact(activeReminder.prompt);
+
+        } else if (!activeReminder) {
+          await updateSummary();
+        }
+
+      } catch (error) {
+        setStatus(
+          "Jadwal gagal diperiksa: " +
+          error.message,
+          "error"
+        );
+      }
+
+      pollTimer =
+        setTimeout(pollReminder, POLL_MS);
+    }
+
+    async function submitReminderAnswer(transcript) {
+      const reminder = activeReminder;
+
+      if (!reminder) return;
+
+      activeReminder = null;
+
+      try {
+        const response = await fetch(
+          "/api/reminder",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+              action: "answer",
+              reminderId: reminder.id,
+              transcript: transcript
+            })
+          }
+        );
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(
+            data.error || "Jawaban gagal disimpan."
+          );
+        }
+
+        setStatus(
+          data.reply,
+          data.action === "unknown"
+            ? ""
+            : "success"
+        );
+
+        speakExact(data.reply);
+        await updateSummary();
+
+      } catch (error) {
+        setStatus(
+          "Jawaban gagal diproses: " +
+          error.message,
+          "error"
+        );
+      }
+    }
+
+    function speakExact(text) {
+      if (
+        !dataChannel ||
+        dataChannel.readyState !== "open"
+      ) {
+        return;
+      }
+
+      dataChannel.send(
+        JSON.stringify({
+          type: "response.create",
+          response: {
+            conversation: "none",
+            output_modalities: ["audio"],
+            instructions:
+              "Ucapkan persis kalimat berikut tanpa tambahan: " +
+              text
+          }
+        })
+      );
+    }
+
+    async function updateSummary() {
+      try {
+        const response = await fetch(
+          "/api/reminder?action=summary",
+          { cache: "no-store" }
+        );
+
+        const data = await response.json();
+
+        if (!data.ok) return;
+
+        detailsBox.textContent =
+          "Status CLOSE: " +
+          data.closeCount +
+          " • Terlambat: " +
+          data.overdueCount +
+          " • Server: " +
+          data.serverTime;
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function stopAssistant() {
+      running = false;
+      activeReminder = null;
+
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+
+      if (dataChannel) {
+        try { dataChannel.close(); } catch (error) {}
+        dataChannel = null;
+      }
+
+      if (peerConnection) {
+        try { peerConnection.close(); } catch (error) {}
+        peerConnection = null;
+      }
+
+      if (localStream) {
+        localStream
+          .getTracks()
+          .forEach(function(track) {
+            track.stop();
+          });
+
+        localStream = null;
+      }
+
+      remoteAudio.srcObject = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      setStatus("Asisten dihentikan.");
+    }
+
+    function waitForIce(pc) {
+      if (
+        pc.iceGatheringState === "complete"
+      ) {
+        return Promise.resolve();
+      }
+
+      return new Promise(function(resolve) {
+        function listener() {
+          if (
+            pc.iceGatheringState === "complete"
+          ) {
+            pc.removeEventListener(
+              "icegatheringstatechange",
+              listener
+            );
+
+            resolve();
+          }
+        }
+
+        pc.addEventListener(
+          "icegatheringstatechange",
+          listener
+        );
+
+        setTimeout(resolve, 3000);
+      });
+    }
+
+    function microphoneError(error) {
+      if (
+        error &&
+        error.name === "NotAllowedError"
+      ) {
+        return (
+          "Izin mikrofon ditolak. " +
+          "Buka pengaturan situs Chrome lalu izinkan mikrofon."
+        );
+      }
+
+      if (
+        error &&
+        error.name === "NotFoundError"
+      ) {
+        return "Mikrofon tidak ditemukan.";
+      }
+
+      if (
+        error &&
+        error.name === "NotReadableError"
+      ) {
+        return (
+          "Mikrofon sedang dipakai aplikasi lain."
+        );
+      }
+
+      return (
+        error && error.message
+          ? error.message
+          : "Gagal membuka mikrofon."
+      );
+    }
+
+    function setStatus(text, type) {
+      statusBox.textContent =
+        String(text || "");
+
+      statusBox.className = "";
+
+      if (type) {
+        statusBox.classList.add(type);
+      }
+    }
+  </script>
+</body>
+</html>
