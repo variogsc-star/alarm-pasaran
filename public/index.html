@@ -2,14 +2,18 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
+
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1"
   >
+
   <title>AI Alarm Suara</title>
 
   <style>
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
     body {
       margin: 0;
@@ -28,10 +32,12 @@
       padding: 22px;
       border-radius: 18px;
       background: #ffffff;
-      box-shadow: 0 12px 35px rgba(0,0,0,.1);
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.1);
     }
 
-    h1 { margin: 0 0 8px; }
+    h1 {
+      margin: 0 0 8px;
+    }
 
     .description {
       color: #6b7280;
@@ -45,6 +51,7 @@
       border-radius: 12px;
       background: #eef2ff;
       line-height: 1.5;
+      overflow-wrap: anywhere;
     }
 
     #status.error {
@@ -83,7 +90,7 @@
     }
 
     button:disabled {
-      opacity: .5;
+      opacity: 0.5;
       cursor: not-allowed;
     }
 
@@ -94,6 +101,7 @@
       font-size: 14px;
       line-height: 1.5;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     audio {
@@ -111,41 +119,61 @@
       Tekan mulai sekali, izinkan mikrofon, lalu biarkan halaman tetap terbuka.
     </div>
 
-    <div id="status">Belum terhubung.</div>
-
-    <div class="buttons">
-      <button id="startButton">Mulai Asisten</button>
-      <button id="stopButton" disabled>Hentikan</button>
+    <div id="status">
+      Belum terhubung.
     </div>
 
-    <audio id="remoteAudio" autoplay></audio>
+    <div class="buttons">
+      <button id="startButton">
+        Mulai Asisten
+      </button>
+
+      <button id="stopButton" disabled>
+        Hentikan
+      </button>
+    </div>
+
+    <audio
+      id="remoteAudio"
+      autoplay
+    ></audio>
 
     <div id="details"></div>
     <div id="transcript"></div>
   </main>
 
   <script>
+    "use strict";
+
     const POLL_MS = 20000;
 
     const startButton =
       document.getElementById("startButton");
+
     const stopButton =
       document.getElementById("stopButton");
+
     const statusBox =
       document.getElementById("status");
+
     const detailsBox =
       document.getElementById("details");
+
     const transcriptBox =
       document.getElementById("transcript");
+
     const remoteAudio =
       document.getElementById("remoteAudio");
 
     let running = false;
+    let starting = false;
+
     let peerConnection = null;
     let dataChannel = null;
     let localStream = null;
     let pollTimer = null;
     let activeReminder = null;
+
 
     startButton.addEventListener(
       "click",
@@ -154,16 +182,41 @@
 
     stopButton.addEventListener(
       "click",
-      stopAssistant
+      function() {
+        stopAssistant({
+          message: "Asisten dihentikan.",
+          preserveStatus: false
+        });
+      }
     );
 
-    async function startAssistant() {
-      if (running) return;
 
+    async function startAssistant() {
+      if (running || starting) {
+        return;
+      }
+
+      starting = true;
       startButton.disabled = true;
-      setStatus("Meminta izin mikrofon...");
+      stopButton.disabled = true;
+
+      clearPollTimer();
+      activeReminder = null;
+
+      setStatus(
+        "Meminta izin mikrofon..."
+      );
 
       try {
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia
+        ) {
+          throw new Error(
+            "Browser ini tidak mendukung akses mikrofon."
+          );
+        }
+
         localStream =
           await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -173,47 +226,38 @@
             }
           });
 
+        setStatus(
+          "Mikrofon aktif. Menghubungkan OpenAI..."
+        );
+
         peerConnection =
           new RTCPeerConnection();
 
         peerConnection.ontrack =
           function(event) {
-            remoteAudio.srcObject =
-              event.streams[0];
+            if (
+              event.streams &&
+              event.streams[0]
+            ) {
+              remoteAudio.srcObject =
+                event.streams[0];
+
+              remoteAudio.play().catch(
+                function(error) {
+                  console.warn(
+                    "Audio belum dapat diputar:",
+                    error
+                  );
+                }
+              );
+            }
           };
 
         peerConnection.onconnectionstatechange =
-          function() {
-            const state =
-              peerConnection.connectionState;
+          handleConnectionStateChange;
 
-            if (state === "connected") {
-              running = true;
-              startButton.disabled = true;
-              stopButton.disabled = false;
-
-              setStatus(
-                "Asisten aktif. Menunggu jadwal.",
-                "success"
-              );
-
-              speakExact(
-                "Asisten alarm sudah aktif."
-              );
-
-              pollReminder();
-            }
-
-            if (
-              state === "failed" ||
-              state === "disconnected"
-            ) {
-              setStatus(
-                "Koneksi Realtime terputus.",
-                "error"
-              );
-            }
-          };
+        peerConnection.oniceconnectionstatechange =
+          handleIceConnectionStateChange;
 
         localStream
           .getTracks()
@@ -238,117 +282,377 @@
           offer
         );
 
-        await waitForIce(peerConnection);
+        await waitForIceGathering(
+          peerConnection
+        );
 
-        const response = await fetch(
-  "/api/realtime",
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8"
-    },
-    body: peerConnection.localDescription.sdp
-  }
-);
-
-        if (!response.ok) {
-          throw new Error(await response.text());
+        if (
+          !peerConnection.localDescription ||
+          !peerConnection.localDescription.sdp
+        ) {
+          throw new Error(
+            "SDP offer dari browser tidak tersedia."
+          );
         }
 
-        const answer = await response.text();
+        const realtimeResponse =
+          await fetch(
+            "/api/realtime",
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "text/plain; charset=utf-8"
+              },
+
+              body:
+                peerConnection.localDescription.sdp
+            }
+          );
+
+        const realtimeBody =
+          await realtimeResponse.text();
+
+        if (!realtimeResponse.ok) {
+          throw new Error(
+            formatServerError(realtimeBody)
+          );
+        }
+
+        if (
+          !realtimeBody ||
+          !realtimeBody.trim().startsWith("v=0")
+        ) {
+          throw new Error(
+            "Respons OpenAI bukan SDP answer yang valid."
+          );
+        }
 
         await peerConnection.setRemoteDescription({
           type: "answer",
-          sdp: answer
+          sdp: realtimeBody
         });
 
-      } catch (error) {
-    console.error("Gagal memulai asisten:", error);
-
-    const errorMessage =
-    microphoneError(error);
-
-    stopAssistant();
-
-    setStatus(
-      errorMessage,
-      "error"
+        setStatus(
+          "Koneksi suara dibuat. Menunggu saluran AI..."
         );
+
+      } catch (error) {
+        console.error(
+          "Gagal memulai asisten:",
+          error
+        );
+
+        const errorMessage =
+          getReadableError(error);
+
+        stopAssistant({
+          preserveStatus: true
+        });
+
+        setStatus(
+          errorMessage,
+          "error"
+        );
+
+      } finally {
+        starting = false;
+
+        if (!running) {
+          startButton.disabled = false;
+        }
       }
     }
 
+
     function setupDataChannel() {
-      dataChannel.onopen = function() {
-        detailsBox.textContent =
-          "Saluran OpenAI terhubung.";
-      };
+      if (!dataChannel) {
+        return;
+      }
+
+      dataChannel.onopen =
+        function() {
+          if (running) {
+            return;
+          }
+
+          running = true;
+          starting = false;
+
+          startButton.disabled = true;
+          stopButton.disabled = false;
+
+          detailsBox.textContent =
+            "Saluran OpenAI terhubung.";
+
+          setStatus(
+            "Asisten aktif. Menunggu jadwal.",
+            "success"
+          );
+
+          speakExact(
+            "Asisten alarm sudah aktif."
+          );
+
+          pollReminder();
+        };
 
       dataChannel.onmessage =
         function(event) {
           try {
-            handleRealtimeEvent(
-              JSON.parse(event.data)
-            );
+            const message =
+              JSON.parse(event.data);
+
+            handleRealtimeEvent(message);
+
           } catch (error) {
-            console.error(error);
+            console.error(
+              "Event Realtime tidak valid:",
+              error,
+              event.data
+            );
+          }
+        };
+
+      dataChannel.onerror =
+        function(error) {
+          console.error(
+            "DataChannel error:",
+            error
+          );
+
+          setStatus(
+            "Terjadi kesalahan pada saluran AI.",
+            "error"
+          );
+        };
+
+      dataChannel.onclose =
+        function() {
+          if (running) {
+            running = false;
+            clearPollTimer();
+
+            startButton.disabled = false;
+            stopButton.disabled = true;
+
+            setStatus(
+              "Saluran AI terputus.",
+              "error"
+            );
           }
         };
     }
 
+
+    function handleConnectionStateChange() {
+      if (!peerConnection) {
+        return;
+      }
+
+      const state =
+        peerConnection.connectionState;
+
+      console.log(
+        "Connection state:",
+        state
+      );
+
+      if (state === "connecting") {
+        setStatus(
+          "Menghubungkan suara..."
+        );
+      }
+
+      if (state === "connected") {
+        setStatus(
+          "Koneksi suara terhubung. Menyiapkan saluran AI..."
+        );
+      }
+
+      if (
+        state === "failed" ||
+        state === "disconnected"
+      ) {
+        setStatus(
+          "Koneksi Realtime terputus.",
+          "error"
+        );
+      }
+
+      if (state === "closed") {
+        running = false;
+      }
+    }
+
+
+    function handleIceConnectionStateChange() {
+      if (!peerConnection) {
+        return;
+      }
+
+      console.log(
+        "ICE state:",
+        peerConnection.iceConnectionState
+      );
+    }
+
+
     function handleRealtimeEvent(event) {
+      if (!event || !event.type) {
+        return;
+      }
+
+      console.log(
+        "Realtime event:",
+        event.type
+      );
+
       if (
         event.type ===
         "conversation.item.input_audio_transcription.completed"
       ) {
         const transcript =
-          String(event.transcript || "").trim();
+          String(
+            event.transcript || ""
+          ).trim();
+
+        if (!transcript) {
+          return;
+        }
 
         transcriptBox.textContent =
           "Kamu: " + transcript;
 
-        if (activeReminder && transcript) {
-          submitReminderAnswer(transcript);
+        if (activeReminder) {
+          submitReminderAnswer(
+            transcript
+          );
         }
+      }
+
+      if (
+        event.type ===
+        "conversation.item.input_audio_transcription.failed"
+      ) {
+        setStatus(
+          "Ucapan tidak berhasil dikenali. Silakan ulangi.",
+          "error"
+        );
       }
 
       if (
         event.type ===
         "response.output_audio_transcript.done"
       ) {
-        transcriptBox.textContent +=
-          "\nAI: " +
-          String(event.transcript || "");
+        const aiTranscript =
+          String(
+            event.transcript || ""
+          ).trim();
+
+        if (aiTranscript) {
+          transcriptBox.textContent +=
+            "\nAI: " +
+            aiTranscript;
+        }
+      }
+
+      if (
+        event.type ===
+        "response.done"
+      ) {
+        const status =
+          event.response &&
+          event.response.status;
+
+        if (status === "failed") {
+          const message =
+            event.response &&
+            event.response.status_details &&
+            event.response.status_details.error &&
+            event.response.status_details.error.message;
+
+          setStatus(
+            message ||
+            "Respons suara OpenAI gagal.",
+            "error"
+          );
+        }
       }
 
       if (event.type === "error") {
-        setStatus(
-          event.error && event.error.message
+        const errorMessage =
+          event.error &&
+          event.error.message
             ? event.error.message
-            : "Terjadi kesalahan Realtime.",
+            : "Terjadi kesalahan Realtime.";
+
+        console.error(
+          "Realtime error:",
+          event
+        );
+
+        setStatus(
+          errorMessage,
           "error"
         );
       }
     }
 
+
     async function pollReminder() {
-      if (!running) return;
+      if (!running) {
+        return;
+      }
+
+      clearPollTimer();
 
       try {
-        const response = await fetch(
-          "/api/reminder?action=next",
-          { cache: "no-store" }
-        );
+        const response =
+          await fetch(
+            "/api/reminder?action=next&_=" +
+            Date.now(),
+            {
+              method: "GET",
+              cache: "no-store"
+            }
+          );
 
-        const data = await response.json();
+        const responseText =
+          await response.text();
 
-        if (!data.ok) {
+        if (!response.ok) {
           throw new Error(
-            data.error || "Gagal membaca jadwal."
+            formatServerError(responseText)
           );
         }
 
-        if (data.reminder && !activeReminder) {
-          activeReminder = data.reminder;
+        let data;
+
+        try {
+          data =
+            JSON.parse(responseText);
+        } catch (error) {
+          throw new Error(
+            "Endpoint jadwal tidak mengembalikan JSON. " +
+            "Periksa deployment Apps Script."
+          );
+        }
+
+        if (!data.ok) {
+          throw new Error(
+            data.error ||
+            "Gagal membaca jadwal."
+          );
+        }
+
+        if (
+          data.reminder &&
+          !activeReminder
+        ) {
+          activeReminder =
+            data.reminder;
 
           detailsBox.textContent =
             "Alarm aktif: " +
@@ -358,55 +662,105 @@
             " • tahap " +
             activeReminder.stage;
 
-          setStatus("Alarm sedang dibacakan.");
+          setStatus(
+            "Alarm sedang dibacakan."
+          );
 
-          speakExact(activeReminder.prompt);
+          transcriptBox.textContent =
+            "AI: " +
+            activeReminder.prompt;
+
+          speakExact(
+            activeReminder.prompt
+          );
 
         } else if (!activeReminder) {
           await updateSummary();
         }
 
       } catch (error) {
+        console.error(
+          "Polling jadwal gagal:",
+          error
+        );
+
         setStatus(
           "Jadwal gagal diperiksa: " +
-          error.message,
+          getReadableError(error),
           "error"
         );
       }
 
-      pollTimer =
-        setTimeout(pollReminder, POLL_MS);
+      if (running) {
+        pollTimer =
+          setTimeout(
+            pollReminder,
+            POLL_MS
+          );
+      }
     }
 
-    async function submitReminderAnswer(transcript) {
-      const reminder = activeReminder;
 
-      if (!reminder) return;
+    async function submitReminderAnswer(
+      transcript
+    ) {
+      const reminder =
+        activeReminder;
+
+      if (!reminder) {
+        return;
+      }
 
       activeReminder = null;
 
-      try {
-        const response = await fetch(
-          "/api/reminder",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json"
-            },
-            body: JSON.stringify({
-              action: "answer",
-              reminderId: reminder.id,
-              transcript: transcript
-            })
-          }
-        );
+      setStatus(
+        "Memproses jawaban..."
+      );
 
-        const data = await response.json();
+      try {
+        const response =
+          await fetch(
+            "/api/reminder",
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+
+              body: JSON.stringify({
+                action: "answer",
+                reminderId: reminder.id,
+                transcript: transcript
+              })
+            }
+          );
+
+        const responseText =
+          await response.text();
+
+        if (!response.ok) {
+          throw new Error(
+            formatServerError(responseText)
+          );
+        }
+
+        let data;
+
+        try {
+          data =
+            JSON.parse(responseText);
+        } catch (error) {
+          throw new Error(
+            "Jawaban server bukan JSON yang valid."
+          );
+        }
 
         if (!data.ok) {
           throw new Error(
-            data.error || "Jawaban gagal disimpan."
+            data.error ||
+            "Jawaban gagal disimpan."
           );
         }
 
@@ -417,50 +771,102 @@
             : "success"
         );
 
-        speakExact(data.reply);
+        speakExact(
+          data.reply
+        );
+
         await updateSummary();
 
       } catch (error) {
+        console.error(
+          "Jawaban gagal diproses:",
+          error
+        );
+
+        activeReminder =
+          reminder;
+
         setStatus(
           "Jawaban gagal diproses: " +
-          error.message,
+          getReadableError(error),
           "error"
         );
       }
     }
 
+
     function speakExact(text) {
+      const cleanText =
+        String(text || "").trim();
+
+      if (!cleanText) {
+        return;
+      }
+
       if (
         !dataChannel ||
         dataChannel.readyState !== "open"
       ) {
+        console.warn(
+          "Saluran AI belum terbuka."
+        );
+
         return;
       }
 
+      const event = {
+        type: "response.create",
+
+        response: {
+          conversation: "none",
+
+          output_modalities: [
+            "audio"
+          ],
+
+          instructions:
+            "Ucapkan persis kalimat berikut " +
+            "dalam bahasa Indonesia tanpa tambahan apa pun: " +
+            cleanText
+        }
+      };
+
       dataChannel.send(
-        JSON.stringify({
-          type: "response.create",
-          response: {
-            conversation: "none",
-            output_modalities: ["audio"],
-            instructions:
-              "Ucapkan persis kalimat berikut tanpa tambahan: " +
-              text
-          }
-        })
+        JSON.stringify(event)
       );
     }
 
+
     async function updateSummary() {
       try {
-        const response = await fetch(
-          "/api/reminder?action=summary",
-          { cache: "no-store" }
-        );
+        const response =
+          await fetch(
+            "/api/reminder?action=summary&_=" +
+            Date.now(),
+            {
+              method: "GET",
+              cache: "no-store"
+            }
+          );
 
-        const data = await response.json();
+        const responseText =
+          await response.text();
 
-        if (!data.ok) return;
+        if (!response.ok) {
+          throw new Error(
+            formatServerError(responseText)
+          );
+        }
+
+        const data =
+          JSON.parse(responseText);
+
+        if (!data.ok) {
+          throw new Error(
+            data.error ||
+            "Ringkasan gagal dibaca."
+          );
+        }
 
         detailsBox.textContent =
           "Status CLOSE: " +
@@ -471,26 +877,41 @@
           data.serverTime;
 
       } catch (error) {
-        console.error(error);
+        console.error(
+          "Ringkasan gagal:",
+          error
+        );
       }
     }
 
-    function stopAssistant() {
+
+    function stopAssistant(options) {
+      const settings =
+        options || {};
+
       running = false;
+      starting = false;
       activeReminder = null;
 
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
-      }
+      clearPollTimer();
 
       if (dataChannel) {
-        try { dataChannel.close(); } catch (error) {}
+        try {
+          dataChannel.close();
+        } catch (error) {
+          console.warn(error);
+        }
+
         dataChannel = null;
       }
 
       if (peerConnection) {
-        try { peerConnection.close(); } catch (error) {}
+        try {
+          peerConnection.close();
+        } catch (error) {
+          console.warn(error);
+        }
+
         peerConnection = null;
       }
 
@@ -504,45 +925,83 @@
         localStream = null;
       }
 
+      remoteAudio.pause();
       remoteAudio.srcObject = null;
+
       startButton.disabled = false;
       stopButton.disabled = true;
-      setStatus("Asisten dihentikan.");
+
+      if (!settings.preserveStatus) {
+        setStatus(
+          settings.message ||
+          "Asisten dihentikan."
+        );
+      }
     }
 
-    function waitForIce(pc) {
+
+    function clearPollTimer() {
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+
+    function waitForIceGathering(pc) {
       if (
         pc.iceGatheringState === "complete"
       ) {
         return Promise.resolve();
       }
 
-      return new Promise(function(resolve) {
-        function listener() {
-          if (
-            pc.iceGatheringState === "complete"
-          ) {
+      return new Promise(
+        function(resolve) {
+          let finished = false;
+
+          function finish() {
+            if (finished) {
+              return;
+            }
+
+            finished = true;
+
             pc.removeEventListener(
               "icegatheringstatechange",
-              listener
+              checkState
             );
 
             resolve();
           }
+
+          function checkState() {
+            if (
+              pc.iceGatheringState === "complete"
+            ) {
+              finish();
+            }
+          }
+
+          pc.addEventListener(
+            "icegatheringstatechange",
+            checkState
+          );
+
+          setTimeout(
+            finish,
+            5000
+          );
         }
-
-        pc.addEventListener(
-          "icegatheringstatechange",
-          listener
-        );
-
-        setTimeout(resolve, 3000);
-      });
+      );
     }
 
-    function microphoneError(error) {
+
+    function getReadableError(error) {
+      if (!error) {
+        return "Terjadi kesalahan yang tidak diketahui.";
+      }
+
       if (
-        error &&
         error.name === "NotAllowedError"
       ) {
         return (
@@ -552,27 +1011,83 @@
       }
 
       if (
-        error &&
         error.name === "NotFoundError"
       ) {
         return "Mikrofon tidak ditemukan.";
       }
 
       if (
-        error &&
         error.name === "NotReadableError"
       ) {
         return (
-          "Mikrofon sedang dipakai aplikasi lain."
+          "Mikrofon sedang digunakan aplikasi lain."
+        );
+      }
+
+      if (
+        error.name === "AbortError"
+      ) {
+        return (
+          "Akses mikrofon dibatalkan oleh browser."
         );
       }
 
       return (
-        error && error.message
-          ? error.message
-          : "Gagal membuka mikrofon."
+        error.message ||
+        String(error)
       );
     }
+
+
+    function formatServerError(text) {
+      const raw =
+        String(text || "").trim();
+
+      if (!raw) {
+        return "Server tidak memberikan pesan error.";
+      }
+
+      try {
+        const parsed =
+          JSON.parse(raw);
+
+        if (
+          parsed.details &&
+          typeof parsed.details === "string"
+        ) {
+          try {
+            const details =
+              JSON.parse(parsed.details);
+
+            return (
+              details.error &&
+              details.error.message
+                ? details.error.message
+                : parsed.error ||
+                  parsed.details
+            );
+          } catch (error) {
+            return (
+              parsed.error
+                ? parsed.error +
+                  ": " +
+                  parsed.details
+                : parsed.details
+            );
+          }
+        }
+
+        return (
+          parsed.error ||
+          parsed.message ||
+          raw
+        );
+
+      } catch (error) {
+        return raw;
+      }
+    }
+
 
     function setStatus(text, type) {
       statusBox.textContent =
@@ -584,6 +1099,29 @@
         statusBox.classList.add(type);
       }
     }
+
+
+    window.addEventListener(
+      "beforeunload",
+      function() {
+        stopAssistant({
+          preserveStatus: true
+        });
+      }
+    );
+
+
+    document.addEventListener(
+      "visibilitychange",
+      function() {
+        if (
+          !document.hidden &&
+          running
+        ) {
+          updateSummary();
+        }
+      }
+    );
   </script>
 </body>
 </html>
