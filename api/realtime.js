@@ -31,12 +31,20 @@ export default async function handler(req, res) {
       sdp = req.body.sdp;
     }
 
-    sdp = sdp.trim();
+    /*
+     * Jangan memakai trim().
+     * SDP membutuhkan format baris CRLF yang benar.
+     */
+    sdp = String(sdp || "")
+      .replace(/\r?\n/g, "\r\n")
+      .replace(/(\r\n)+$/, "") +
+      "\r\n";
 
-    if (!sdp || !sdp.startsWith("v=0")) {
+    if (!sdp.startsWith("v=0\r\n")) {
       return res.status(400).json({
-        error: "SDP offer tidak valid atau tidak ditemukan.",
-        receivedType: typeof req.body,
+        error: "SDP offer tidak valid.",
+        preview: sdp.substring(0, 100),
+        length: sdp.length,
         contentType:
           req.headers["content-type"] || ""
       });
@@ -53,7 +61,7 @@ export default async function handler(req, res) {
       instructions: [
         "Kamu adalah asisten pengingat suara berbahasa Indonesia.",
         "Jawab singkat, jelas, dan alami.",
-        "Saat diminta mengucapkan alarm, ucapkan persis kalimat tersebut tanpa tambahan."
+        "Saat diminta mengucapkan kalimat alarm, ucapkan persis kalimat tersebut tanpa tambahan."
       ].join(" "),
 
       audio: {
@@ -85,27 +93,34 @@ export default async function handler(req, res) {
       max_output_tokens: 250
     };
 
-    const boundary =
-      "----OpenAIRealtimeBoundary" +
-      Date.now().toString(16) +
-      Math.random().toString(16).slice(2);
+    /*
+     * Gunakan FormData bawaan.
+     * Jangan mengatur boundary atau Content-Length manual.
+     */
+    const formData = new FormData();
 
-    const multipartBody = [
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="sdp"`,
-      `Content-Type: application/sdp`,
-      ``,
-      sdp,
+    /*
+     * SDP dikirim sebagai field teks biasa,
+     * bukan Blob atau file.
+     */
+    formData.append(
+      "sdp",
+      sdp
+    );
 
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="session"`,
-      `Content-Type: application/json`,
-      ``,
-      JSON.stringify(session),
-
-      `--${boundary}--`,
-      ``
-    ].join("\r\n");
+    /*
+     * Session dikirim sebagai JSON.
+     */
+    formData.append(
+      "session",
+      new Blob(
+        [JSON.stringify(session)],
+        {
+          type: "application/json"
+        }
+      ),
+      "session.json"
+    );
 
     const openAIResponse = await fetch(
       "https://api.openai.com/v1/realtime/calls",
@@ -113,13 +128,10 @@ export default async function handler(req, res) {
         method: "POST",
 
         headers: {
-          Authorization: `Bearer ${apiKey}`,
-
-          "Content-Type":
-            `multipart/form-data; boundary=${boundary}`
+          Authorization: `Bearer ${apiKey}`
         },
 
-        body: multipartBody
+        body: formData
       }
     );
 
@@ -129,6 +141,7 @@ export default async function handler(req, res) {
     if (!openAIResponse.ok) {
       console.error(
         "OpenAI Realtime error:",
+        openAIResponse.status,
         responseBody
       );
 
@@ -139,6 +152,18 @@ export default async function handler(req, res) {
           status: openAIResponse.status,
           details: responseBody
         });
+    }
+
+    if (
+      !responseBody ||
+      !responseBody.startsWith("v=0")
+    ) {
+      return res.status(502).json({
+        error:
+          "OpenAI tidak mengembalikan SDP answer yang valid.",
+        preview:
+          responseBody.substring(0, 200)
+      });
     }
 
     return res
