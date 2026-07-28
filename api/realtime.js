@@ -37,7 +37,8 @@ export default async function handler(req, res) {
       return res.status(400).json({
         error: "SDP offer tidak valid atau tidak ditemukan.",
         receivedType: typeof req.body,
-        contentType: req.headers["content-type"] || ""
+        contentType:
+          req.headers["content-type"] || ""
       });
     }
 
@@ -52,7 +53,7 @@ export default async function handler(req, res) {
       instructions: [
         "Kamu adalah asisten pengingat suara berbahasa Indonesia.",
         "Jawab singkat, jelas, dan alami.",
-        "Saat diminta mengucapkan kalimat alarm, ucapkan persis kalimat tersebut tanpa tambahan."
+        "Saat diminta mengucapkan alarm, ucapkan persis kalimat tersebut tanpa tambahan."
       ].join(" "),
 
       audio: {
@@ -84,55 +85,27 @@ export default async function handler(req, res) {
       max_output_tokens: 250
     };
 
-    /*
-     * Buat multipart/form-data secara manual.
-     * Ini menghindari masalah FormData + Blob
-     * pada runtime serverless tertentu.
-     */
     const boundary =
-      "----OpenAIBoundary" +
+      "----OpenAIRealtimeBoundary" +
       Date.now().toString(16) +
       Math.random().toString(16).slice(2);
 
-    const chunks = [];
+    const multipartBody = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="sdp"`,
+      `Content-Type: application/sdp`,
+      ``,
+      sdp,
 
-    chunks.push(
-      Buffer.from(
-        [
-          `--${boundary}`,
-          `Content-Disposition: form-data; name="sdp"; filename="offer.sdp"`,
-          `Content-Type: application/sdp`,
-          "",
-          sdp,
-          ""
-        ].join("\r\n"),
-        "utf8"
-      )
-    );
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="session"`,
+      `Content-Type: application/json`,
+      ``,
+      JSON.stringify(session),
 
-    chunks.push(
-      Buffer.from(
-        [
-          `--${boundary}`,
-          `Content-Disposition: form-data; name="session"`,
-          `Content-Type: application/json`,
-          "",
-          JSON.stringify(session),
-          ""
-        ].join("\r\n"),
-        "utf8"
-      )
-    );
-
-    chunks.push(
-      Buffer.from(
-        `--${boundary}--\r\n`,
-        "utf8"
-      )
-    );
-
-    const multipartBody =
-      Buffer.concat(chunks);
+      `--${boundary}--`,
+      ``
+    ].join("\r\n");
 
     const openAIResponse = await fetch(
       "https://api.openai.com/v1/realtime/calls",
@@ -143,10 +116,7 @@ export default async function handler(req, res) {
           Authorization: `Bearer ${apiKey}`,
 
           "Content-Type":
-            `multipart/form-data; boundary=${boundary}`,
-
-          "Content-Length":
-            String(multipartBody.length)
+            `multipart/form-data; boundary=${boundary}`
         },
 
         body: multipartBody
