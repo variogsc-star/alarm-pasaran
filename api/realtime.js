@@ -18,14 +18,26 @@ export default async function handler(req, res) {
   }
 
   try {
-    const sdp =
-      typeof req.body === "string"
-        ? req.body
-        : req.body?.sdp;
+    let sdp = "";
 
-    if (!sdp) {
+    if (typeof req.body === "string") {
+      sdp = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      sdp = req.body.toString("utf8");
+    } else if (
+      req.body &&
+      typeof req.body.sdp === "string"
+    ) {
+      sdp = req.body.sdp;
+    }
+
+    sdp = sdp.trim();
+
+    if (!sdp || !sdp.startsWith("v=0")) {
       return res.status(400).json({
-        error: "SDP tidak ditemukan."
+        error: "SDP offer tidak valid atau tidak ditemukan.",
+        receivedType: typeof req.body,
+        contentType: req.headers["content-type"] || ""
       });
     }
 
@@ -33,20 +45,24 @@ export default async function handler(req, res) {
       type: "realtime",
       model: "gpt-realtime",
       output_modalities: ["audio"],
+
       instructions: [
         "Kamu adalah asisten pengingat suara berbahasa Indonesia.",
         "Jawab singkat, jelas, dan alami.",
         "Saat diminta mengucapkan kalimat alarm, ucapkan persis kalimat tersebut tanpa tambahan."
       ].join(" "),
+
       audio: {
         input: {
           transcription: {
             model: "gpt-4o-mini-transcribe",
             language: "id"
           },
+
           noise_reduction: {
             type: "near_field"
           },
+
           turn_detection: {
             type: "server_vad",
             create_response: false,
@@ -55,11 +71,13 @@ export default async function handler(req, res) {
             prefix_padding_ms: 300
           }
         },
+
         output: {
           voice: "marin",
           speed: 1
         }
       },
+
       max_output_tokens: 250
     };
 
@@ -75,9 +93,12 @@ export default async function handler(req, res) {
 
     form.append(
       "session",
-      new Blob([JSON.stringify(session)], {
-        type: "application/json"
-      }),
+      new Blob(
+        [JSON.stringify(session)],
+        {
+          type: "application/json"
+        }
+      ),
       "session.json"
     );
 
@@ -92,24 +113,43 @@ export default async function handler(req, res) {
       }
     );
 
-    const body = await openAIResponse.text();
+    const responseBody =
+      await openAIResponse.text();
 
     if (!openAIResponse.ok) {
-      return res.status(openAIResponse.status).json({
-        error: "OpenAI Realtime gagal.",
-        details: body
-      });
+      console.error(
+        "OpenAI Realtime error:",
+        responseBody
+      );
+
+      return res
+        .status(openAIResponse.status)
+        .json({
+          error: "OpenAI Realtime gagal.",
+          details: responseBody
+        });
     }
 
-    res
+    return res
       .status(201)
-      .setHeader("Content-Type", "application/sdp")
-      .send(body);
+      .setHeader(
+        "Content-Type",
+        "application/sdp"
+      )
+      .send(responseBody);
 
   } catch (error) {
-    res.status(500).json({
+    console.error(
+      "Realtime server error:",
+      error
+    );
+
+    return res.status(500).json({
       error: "Kesalahan server.",
-      details: error.message
+      details:
+        error instanceof Error
+          ? error.message
+          : String(error)
     });
   }
 }
