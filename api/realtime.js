@@ -44,7 +44,10 @@ export default async function handler(req, res) {
     const session = {
       type: "realtime",
       model: "gpt-realtime",
-      output_modalities: ["audio"],
+
+      output_modalities: [
+        "audio"
+      ],
 
       instructions: [
         "Kamu adalah asisten pengingat suara berbahasa Indonesia.",
@@ -81,35 +84,72 @@ export default async function handler(req, res) {
       max_output_tokens: 250
     };
 
-    const form = new FormData();
+    /*
+     * Buat multipart/form-data secara manual.
+     * Ini menghindari masalah FormData + Blob
+     * pada runtime serverless tertentu.
+     */
+    const boundary =
+      "----OpenAIBoundary" +
+      Date.now().toString(16) +
+      Math.random().toString(16).slice(2);
 
-    form.append(
-      "sdp",
-      new Blob([sdp], {
-        type: "application/sdp"
-      }),
-      "offer.sdp"
+    const chunks = [];
+
+    chunks.push(
+      Buffer.from(
+        [
+          `--${boundary}`,
+          `Content-Disposition: form-data; name="sdp"; filename="offer.sdp"`,
+          `Content-Type: application/sdp`,
+          "",
+          sdp,
+          ""
+        ].join("\r\n"),
+        "utf8"
+      )
     );
 
-    form.append(
-      "session",
-      new Blob(
-        [JSON.stringify(session)],
-        {
-          type: "application/json"
-        }
-      ),
-      "session.json"
+    chunks.push(
+      Buffer.from(
+        [
+          `--${boundary}`,
+          `Content-Disposition: form-data; name="session"`,
+          `Content-Type: application/json`,
+          "",
+          JSON.stringify(session),
+          ""
+        ].join("\r\n"),
+        "utf8"
+      )
     );
+
+    chunks.push(
+      Buffer.from(
+        `--${boundary}--\r\n`,
+        "utf8"
+      )
+    );
+
+    const multipartBody =
+      Buffer.concat(chunks);
 
     const openAIResponse = await fetch(
       "https://api.openai.com/v1/realtime/calls",
       {
         method: "POST",
+
         headers: {
-          Authorization: `Bearer ${apiKey}`
+          Authorization: `Bearer ${apiKey}`,
+
+          "Content-Type":
+            `multipart/form-data; boundary=${boundary}`,
+
+          "Content-Length":
+            String(multipartBody.length)
         },
-        body: form
+
+        body: multipartBody
       }
     );
 
@@ -126,6 +166,7 @@ export default async function handler(req, res) {
         .status(openAIResponse.status)
         .json({
           error: "OpenAI Realtime gagal.",
+          status: openAIResponse.status,
           details: responseBody
         });
     }
