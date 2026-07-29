@@ -4,49 +4,34 @@ export const config = {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+
     return res.status(405).json({
+      ok: false,
       error: "Method tidak diizinkan."
     });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = String(
+    process.env.OPENAI_API_KEY || ""
+  ).trim();
 
   if (!apiKey) {
     return res.status(500).json({
+      ok: false,
       error: "OPENAI_API_KEY belum diatur."
     });
   }
 
   try {
-    let sdp = "";
+    const sdp = readSdpBody(req);
 
-    if (typeof req.body === "string") {
-      sdp = req.body;
-    } else if (Buffer.isBuffer(req.body)) {
-      sdp = req.body.toString("utf8");
-    } else if (
-      req.body &&
-      typeof req.body.sdp === "string"
-    ) {
-      sdp = req.body.sdp;
-    }
-
-    /*
-     * Jangan memakai trim().
-     * SDP membutuhkan format baris CRLF yang benar.
-     */
-    sdp = String(sdp || "")
-      .replace(/\r?\n/g, "\r\n")
-      .replace(/(\r\n)+$/, "") +
-      "\r\n";
-
-    if (!sdp.startsWith("v=0\r\n")) {
+    if (!sdp || !sdp.startsWith("v=0")) {
       return res.status(400).json({
-        error: "SDP offer tidak valid.",
-        preview: sdp.substring(0, 100),
-        length: sdp.length,
-        contentType:
-          req.headers["content-type"] || ""
+        ok: false,
+        error: "SDP offer tidak valid atau tidak ditemukan.",
+        contentType: req.headers["content-type"] || "",
+        receivedType: typeof req.body
       });
     }
 
@@ -59,16 +44,27 @@ export default async function handler(req, res) {
       ],
 
       instructions: [
-        "Kamu adalah asisten pengingat suara berbahasa Indonesia.",
-        "Jawab singkat, jelas, dan alami.",
-        "Saat diminta mengucapkan kalimat alarm, ucapkan persis kalimat tersebut tanpa tambahan."
+        "Kamu adalah asisten alarm suara.",
+        "Kamu wajib selalu berbicara menggunakan bahasa Indonesia.",
+        "Jangan pernah menjawab menggunakan bahasa Inggris.",
+        "Gunakan pengucapan bahasa Indonesia yang jelas dan alami.",
+        "Gunakan gaya bicara singkat, tegas, dan mudah dipahami.",
+        "Jangan menerjemahkan nama jadwal atau nama yang diberikan pengguna.",
+        "Ketika diminta membacakan sebuah kalimat, ucapkan kalimat itu persis tanpa tambahan.",
+        "Jangan menambahkan pembukaan, penjelasan, salam, atau penutup.",
+        "Jawaban pengguna biasanya berhubungan dengan sudah, gangguan, diundur, atau libur."
       ].join(" "),
 
       audio: {
         input: {
           transcription: {
             model: "gpt-4o-mini-transcribe",
-            language: "id"
+            language: "id",
+
+            prompt: [
+              "Seluruh ucapan menggunakan bahasa Indonesia.",
+              "Kata yang sering digunakan adalah sudah, udah, gangguan, diundur, libur, jadwal, alarm, buka, dan belum."
+            ].join(" ")
           },
 
           noise_reduction: {
@@ -93,24 +89,17 @@ export default async function handler(req, res) {
       max_output_tokens: 250
     };
 
-    /*
-     * Gunakan FormData bawaan.
-     * Jangan mengatur boundary atau Content-Length manual.
-     */
     const formData = new FormData();
 
     /*
-     * SDP dikirim sebagai field teks biasa,
-     * bukan Blob atau file.
+     * SDP dikirim sebagai field teks.
+     * Jangan memakai Blob untuk SDP.
      */
     formData.append(
       "sdp",
-      sdp
+      normalizeSdp(sdp)
     );
 
-    /*
-     * Session dikirim sebagai JSON.
-     */
     formData.append(
       "session",
       new Blob(
@@ -140,7 +129,7 @@ export default async function handler(req, res) {
 
     if (!openAIResponse.ok) {
       console.error(
-        "OpenAI Realtime error:",
+        "OpenAI Realtime gagal:",
         openAIResponse.status,
         responseBody
       );
@@ -148,6 +137,7 @@ export default async function handler(req, res) {
       return res
         .status(openAIResponse.status)
         .json({
+          ok: false,
           error: "OpenAI Realtime gagal.",
           status: openAIResponse.status,
           details: responseBody
@@ -156,22 +146,29 @@ export default async function handler(req, res) {
 
     if (
       !responseBody ||
-      !responseBody.startsWith("v=0")
+      !responseBody.trim().startsWith("v=0")
     ) {
       return res.status(502).json({
+        ok: false,
         error:
           "OpenAI tidak mengembalikan SDP answer yang valid.",
         preview:
-          responseBody.substring(0, 200)
+          responseBody.substring(0, 300)
       });
     }
 
+    res.setHeader(
+      "Content-Type",
+      "application/sdp"
+    );
+
+    res.setHeader(
+      "Cache-Control",
+      "no-store"
+    );
+
     return res
       .status(201)
-      .setHeader(
-        "Content-Type",
-        "application/sdp"
-      )
       .send(responseBody);
 
   } catch (error) {
@@ -181,11 +178,41 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: "Kesalahan server.",
+      ok: false,
+      error: "Kesalahan server Realtime.",
       details:
         error instanceof Error
           ? error.message
           : String(error)
     });
   }
+}
+
+
+function readSdpBody(req) {
+  let sdp = "";
+
+  if (typeof req.body === "string") {
+    sdp = req.body;
+
+  } else if (Buffer.isBuffer(req.body)) {
+    sdp = req.body.toString("utf8");
+
+  } else if (
+    req.body &&
+    typeof req.body.sdp === "string"
+  ) {
+    sdp = req.body.sdp;
+  }
+
+  return String(sdp || "");
+}
+
+
+function normalizeSdp(value) {
+  const normalized = String(value || "")
+    .replace(/\r?\n/g, "\r\n")
+    .replace(/(\r\n)+$/, "");
+
+  return normalized + "\r\n";
 }
