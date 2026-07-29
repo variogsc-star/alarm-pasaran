@@ -24,14 +24,28 @@ export default async function handler(req, res) {
   }
 
   try {
-    const sdp = readSdpBody(req);
+    let sdp = "";
 
-    if (!sdp || !sdp.startsWith("v=0")) {
+    if (typeof req.body === "string") {
+      sdp = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      sdp = req.body.toString("utf8");
+    } else if (
+      req.body &&
+      typeof req.body.sdp === "string"
+    ) {
+      sdp = req.body.sdp;
+    }
+
+    sdp = normalizeSdp(sdp);
+
+    if (!sdp.startsWith("v=0\r\n")) {
       return res.status(400).json({
         ok: false,
         error: "SDP offer tidak valid atau tidak ditemukan.",
         contentType: req.headers["content-type"] || "",
-        receivedType: typeof req.body
+        receivedType: typeof req.body,
+        preview: sdp.substring(0, 100)
       });
     }
 
@@ -44,12 +58,15 @@ export default async function handler(req, res) {
       ],
 
       instructions: [
-  "Kamu adalah asisten alarm suara berbahasa Indonesia.",
-  "Selalu gunakan bahasa Indonesia.",
-  "Gunakan pelafalan Indonesia yang jelas, netral, dan alami.",
-  "Jangan menggunakan aksen Rusia, Inggris, atau bahasa lain.",
-  "Bacakan teks yang diberikan persis tanpa tambahan."
-].join(" "),
+        "Kamu adalah asisten alarm suara.",
+        "Selalu berbicara menggunakan bahasa Indonesia.",
+        "Jangan menggunakan bahasa Inggris, Rusia, atau bahasa lain.",
+        "Gunakan pengucapan bahasa Indonesia yang jelas, netral, dan alami.",
+        "Jawaban harus singkat dan tegas.",
+        "Saat menerima teks alarm, bacakan teks tersebut persis.",
+        "Jangan menerjemahkan nama jadwal.",
+        "Jangan menambahkan salam, penjelasan, pembukaan, atau penutup."
+      ].join(" "),
 
       audio: {
         input: {
@@ -58,8 +75,9 @@ export default async function handler(req, res) {
             language: "id",
 
             prompt: [
-              "Seluruh ucapan menggunakan bahasa Indonesia.",
-              "Kata yang sering digunakan adalah sudah, udah, gangguan, diundur, libur, jadwal, alarm, buka, dan belum."
+              "Ucapan menggunakan bahasa Indonesia.",
+              "Kata yang sering digunakan:",
+              "sudah, udah, gangguan, diundur, libur, buka, belum, jadwal, dan alarm."
             ].join(" ")
           },
 
@@ -77,8 +95,7 @@ export default async function handler(req, res) {
         },
 
         output: {
-          voice: "cedar",
-          speed: 0.95
+          voice: "cedar"
         }
       },
 
@@ -87,13 +104,9 @@ export default async function handler(req, res) {
 
     const formData = new FormData();
 
-    /*
-     * SDP dikirim sebagai field teks.
-     * Jangan memakai Blob untuk SDP.
-     */
     formData.append(
       "sdp",
-      normalizeSdp(sdp)
+      sdp
     );
 
     formData.append(
@@ -125,7 +138,7 @@ export default async function handler(req, res) {
 
     if (!openAIResponse.ok) {
       console.error(
-        "OpenAI Realtime gagal:",
+        "OpenAI Realtime error:",
         openAIResponse.status,
         responseBody
       );
@@ -182,26 +195,6 @@ export default async function handler(req, res) {
           : String(error)
     });
   }
-}
-
-
-function readSdpBody(req) {
-  let sdp = "";
-
-  if (typeof req.body === "string") {
-    sdp = req.body;
-
-  } else if (Buffer.isBuffer(req.body)) {
-    sdp = req.body.toString("utf8");
-
-  } else if (
-    req.body &&
-    typeof req.body.sdp === "string"
-  ) {
-    sdp = req.body.sdp;
-  }
-
-  return String(sdp || "");
 }
 
 
