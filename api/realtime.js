@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   if (!apiKey) {
     return res.status(500).json({
       ok: false,
-      error: "OPENAI_API_KEY belum diatur."
+      error: "OPENAI_API_KEY belum diatur di Vercel."
     });
   }
 
@@ -27,24 +27,19 @@ export default async function handler(req, res) {
     const rawSdp = readSdpBody(req);
     const sdp = normalizeSdp(rawSdp);
 
-    if (!sdp.startsWith("v=0\r\n")) {
+    if (!sdp || !sdp.startsWith("v=0\r\n")) {
       return res.status(400).json({
         ok: false,
-        error: "SDP offer tidak valid.",
-        contentType:
-          req.headers["content-type"] || "",
-        preview:
-          sdp.substring(0, 120)
+        error: "SDP offer tidak valid atau tidak ditemukan.",
+        contentType: req.headers["content-type"] || "",
+        receivedType: typeof req.body,
+        preview: String(rawSdp || "").substring(0, 120)
       });
     }
 
     /*
-     * Realtime hanya dipakai untuk mendengar
-     * dan mentranskripsikan suara pengguna.
-     *
-     * create_response dibuat false agar model
-     * tidak menjawab dengan suara Inggris,
-     * Rusia, atau bahasa lainnya.
+     * Realtime hanya mendengar dan membuat transkripsi.
+     * Ia tidak diberi izin membuat respons suara sendiri.
      */
     const session = {
       type: "realtime",
@@ -55,26 +50,23 @@ export default async function handler(req, res) {
       ],
 
       instructions: [
-        "Kamu adalah sistem transkripsi alarm.",
-        "Jangan membuat jawaban suara otomatis.",
+        "Kamu adalah sistem transkripsi untuk alarm jadwal.",
         "Ucapan pengguna menggunakan bahasa Indonesia.",
+        "Jangan membuat jawaban suara secara otomatis.",
         "Fokus mengenali jawaban singkat mengenai status jadwal."
       ].join(" "),
 
       audio: {
         input: {
           transcription: {
-            model:
-              "gpt-4o-mini-transcribe",
-
+            model: "gpt-4o-mini-transcribe",
             language: "id",
 
             prompt: [
-              "Transkripsikan ucapan sebagai bahasa Indonesia.",
-              "Kosakata yang sering muncul:",
-              "sudah, udah, belum, gangguan,",
-              "diundur, libur, buka, tutup,",
-              "jadwal, alarm, selesai, dan batal."
+              "Transkripsikan seluruh ucapan sebagai bahasa Indonesia.",
+              "Kosakata yang sering digunakan:",
+              "sudah, udah, belum, gangguan, diundur, libur,",
+              "buka, tutup, selesai, batal, jadwal, dan alarm."
             ].join(" ")
           },
 
@@ -86,15 +78,9 @@ export default async function handler(req, res) {
             type: "server_vad",
 
             /*
-             * Sangat penting.
-             * Jangan izinkan Realtime menjawab.
+             * Realtime tidak menjawab sendiri.
              */
             create_response: false,
-
-            /*
-             * Karena tidak ada respons AI Realtime,
-             * tidak perlu menginterupsi respons.
-             */
             interrupt_response: false,
 
             prefix_padding_ms: 300,
@@ -102,11 +88,11 @@ export default async function handler(req, res) {
           }
         },
 
+        /*
+         * Field output tetap disediakan agar sesi audio valid.
+         * Suara alarm sebenarnya sebaiknya melalui /api/tts.
+         */
         output: {
-          /*
-           * Tidak digunakan untuk alarm.
-           * Suara alarm datang dari /api/tts.
-           */
           voice: "cedar"
         }
       },
@@ -116,17 +102,18 @@ export default async function handler(req, res) {
 
     const formData = new FormData();
 
+    /*
+     * PENTING:
+     * Kirim SDP sebagai field teks, bukan Blob/file.
+     */
     formData.append(
       "sdp",
-      new Blob(
-        [sdp],
-        {
-          type: "application/sdp"
-        }
-      ),
-      "offer.sdp"
+      sdp
     );
 
+    /*
+     * Session dikirim sebagai bagian application/json.
+     */
     formData.append(
       "session",
       new Blob(
@@ -138,20 +125,22 @@ export default async function handler(req, res) {
       "session.json"
     );
 
-    const openAIResponse =
-      await fetch(
-        "https://api.openai.com/v1/realtime/calls",
-        {
-          method: "POST",
+    const openAIResponse = await fetch(
+      "https://api.openai.com/v1/realtime/calls?model=gpt-realtime",
+      {
+        method: "POST",
 
-          headers: {
-            Authorization:
-              `Bearer ${apiKey}`
-          },
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
 
-          body: formData
-        }
-      );
+        /*
+         * Jangan menulis Content-Type multipart secara manual.
+         * FormData akan membuat boundary secara otomatis.
+         */
+        body: formData
+      }
+    );
 
     const responseBody =
       await openAIResponse.text();
@@ -167,21 +156,21 @@ export default async function handler(req, res) {
         .status(openAIResponse.status)
         .json({
           ok: false,
-          error:
-            "OpenAI Realtime gagal.",
-          status:
-            openAIResponse.status,
-          details:
-            responseBody
+          error: "OpenAI Realtime gagal.",
+          status: openAIResponse.status,
+          details: responseBody
         });
     }
 
     if (
       !responseBody ||
-      !responseBody
-        .trim()
-        .startsWith("v=0")
+      !responseBody.trim().startsWith("v=0")
     ) {
+      console.error(
+        "SDP answer tidak valid:",
+        responseBody.substring(0, 300)
+      );
+
       return res.status(502).json({
         ok: false,
         error:
@@ -198,7 +187,7 @@ export default async function handler(req, res) {
 
     res.setHeader(
       "Cache-Control",
-      "no-store"
+      "no-store, no-cache, must-revalidate"
     );
 
     return res
@@ -213,8 +202,7 @@ export default async function handler(req, res) {
 
     return res.status(500).json({
       ok: false,
-      error:
-        "Kesalahan server Realtime.",
+      error: "Kesalahan server Realtime.",
       details:
         error instanceof Error
           ? error.message
@@ -224,6 +212,10 @@ export default async function handler(req, res) {
 }
 
 
+/*
+ * Membaca SDP yang dikirim index.html.
+ * Mendukung string, Buffer, atau object { sdp }.
+ */
 function readSdpBody(req) {
   if (typeof req.body === "string") {
     return req.body;
@@ -244,11 +236,18 @@ function readSdpBody(req) {
 }
 
 
+/*
+ * OpenAI membutuhkan format baris CRLF untuk SDP.
+ */
 function normalizeSdp(value) {
   const normalized =
     String(value || "")
       .replace(/\r?\n/g, "\r\n")
       .replace(/(\r\n)+$/, "");
+
+  if (!normalized) {
+    return "";
+  }
 
   return normalized + "\r\n";
 }
