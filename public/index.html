@@ -21,18 +21,28 @@
       display: grid;
       place-items: center;
       padding: 18px;
+
       background: #f3f4f6;
       color: #111827;
-      font-family: Arial, sans-serif;
+
+      font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
     }
 
     .card {
       width: 100%;
-      max-width: 560px;
+      max-width: 580px;
+
       padding: 22px;
+
       border-radius: 18px;
       background: #ffffff;
-      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.1);
+
+      box-shadow:
+        0 12px 35px
+        rgba(0, 0, 0, 0.1);
     }
 
     h1 {
@@ -48,20 +58,27 @@
       margin: 18px 0;
       min-height: 62px;
       padding: 14px;
+
       border-radius: 12px;
       background: #eef2ff;
+
       line-height: 1.5;
       overflow-wrap: anywhere;
     }
 
-    #status.error {
-      background: #fee2e2;
-      color: #991b1b;
+    #status.success {
+      color: #166534;
+      background: #dcfce7;
     }
 
-    #status.success {
-      background: #dcfce7;
-      color: #166534;
+    #status.error {
+      color: #991b1b;
+      background: #fee2e2;
+    }
+
+    #status.speaking {
+      color: #92400e;
+      background: #fef3c7;
     }
 
     .buttons {
@@ -72,21 +89,24 @@
     button {
       width: 100%;
       padding: 15px;
+
       border: 0;
       border-radius: 12px;
+
       font-size: 16px;
       font-weight: 700;
+
       cursor: pointer;
     }
 
     #startButton {
-      background: #2563eb;
       color: #ffffff;
+      background: #2563eb;
     }
 
     #stopButton {
-      background: #e5e7eb;
       color: #111827;
+      background: #e5e7eb;
     }
 
     button:disabled {
@@ -97,16 +117,22 @@
     #details,
     #transcript {
       margin-top: 14px;
+
       color: #4b5563;
+
       font-size: 14px;
       line-height: 1.5;
+
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
 
+    #transcript {
+      min-height: 24px;
+    }
+
     audio {
-      width: 100%;
-      margin-top: 12px;
+      display: none;
     }
   </style>
 </head>
@@ -116,7 +142,7 @@
     <h1>AI Alarm Suara</h1>
 
     <div class="description">
-      Tekan mulai sekali, izinkan mikrofon, lalu biarkan halaman tetap terbuka.
+      Tekan mulai, izinkan mikrofon, lalu biarkan halaman tetap terbuka.
     </div>
 
     <div id="status">
@@ -128,11 +154,15 @@
         Mulai Asisten
       </button>
 
-      <button id="stopButton" disabled>
+      <button
+        id="stopButton"
+        disabled
+      >
         Hentikan
       </button>
     </div>
 
+    <!-- Audio dari Realtime tidak digunakan untuk berbicara. -->
     <audio
       id="remoteAudio"
       autoplay
@@ -149,22 +179,34 @@
     const POLL_MS = 20000;
 
     const startButton =
-      document.getElementById("startButton");
+      document.getElementById(
+        "startButton"
+      );
 
     const stopButton =
-      document.getElementById("stopButton");
+      document.getElementById(
+        "stopButton"
+      );
 
     const statusBox =
-      document.getElementById("status");
+      document.getElementById(
+        "status"
+      );
 
     const detailsBox =
-      document.getElementById("details");
+      document.getElementById(
+        "details"
+      );
 
     const transcriptBox =
-      document.getElementById("transcript");
+      document.getElementById(
+        "transcript"
+      );
 
     const remoteAudio =
-      document.getElementById("remoteAudio");
+      document.getElementById(
+        "remoteAudio"
+      );
 
     let running = false;
     let starting = false;
@@ -176,18 +218,28 @@
     let pollTimer = null;
     let activeReminder = null;
 
+    /*
+     * Audio TTS terpisah.
+     */
+    let ttsAudio = null;
+    let ttsObjectUrl = null;
+    let ttsToken = 0;
+    let ttsPlaying = false;
+
 
     startButton.addEventListener(
       "click",
       startAssistant
     );
 
+
     stopButton.addEventListener(
       "click",
       function() {
         stopAssistant({
-          message: "Asisten dihentikan.",
-          preserveStatus: false
+          preserveStatus: false,
+          message:
+            "Asisten dihentikan."
         });
       }
     );
@@ -199,12 +251,15 @@
       }
 
       starting = true;
+
       startButton.disabled = true;
       stopButton.disabled = true;
 
       clearPollTimer();
+      cancelTts();
 
       activeReminder = null;
+
       detailsBox.textContent = "";
       transcriptBox.textContent = "";
 
@@ -215,21 +270,23 @@
       try {
         if (
           !navigator.mediaDevices ||
-          !navigator.mediaDevices.getUserMedia
+          !navigator.mediaDevices
+            .getUserMedia
         ) {
           throw new Error(
-            "Browser ini tidak mendukung akses mikrofon."
+            "Browser tidak mendukung akses mikrofon."
           );
         }
 
         localStream =
-          await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          });
+          await navigator.mediaDevices
+            .getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
 
         setStatus(
           "Mikrofon aktif. Menghubungkan OpenAI..."
@@ -240,6 +297,14 @@
 
         peerConnection.ontrack =
           function(event) {
+            /*
+             * Realtime tidak diperbolehkan
+             * membuat jawaban otomatis.
+             *
+             * Track tetap dipasang agar koneksi
+             * WebRTC lengkap, tetapi volumenya
+             * dimatikan.
+             */
             if (
               event.streams &&
               event.streams[0]
@@ -247,31 +312,31 @@
               remoteAudio.srcObject =
                 event.streams[0];
 
-              remoteAudio
-                .play()
-                .catch(function(error) {
-                  console.warn(
-                    "Audio belum dapat diputar:",
-                    error
-                  );
-                });
+              remoteAudio.muted = true;
+              remoteAudio.volume = 0;
             }
           };
 
-        peerConnection.onconnectionstatechange =
-          handleConnectionStateChange;
 
-        peerConnection.oniceconnectionstatechange =
-          function() {
-            if (!peerConnection) {
-              return;
-            }
+        peerConnection
+          .onconnectionstatechange =
+            handleConnectionStateChange;
 
-            console.log(
-              "ICE state:",
-              peerConnection.iceConnectionState
-            );
-          };
+
+        peerConnection
+          .oniceconnectionstatechange =
+            function() {
+              if (!peerConnection) {
+                return;
+              }
+
+              console.log(
+                "ICE:",
+                peerConnection
+                  .iceConnectionState
+              );
+            };
+
 
         localStream
           .getTracks()
@@ -282,35 +347,46 @@
             );
           });
 
+
         dataChannel =
-          peerConnection.createDataChannel(
-            "oai-events"
-          );
+          peerConnection
+            .createDataChannel(
+              "oai-events"
+            );
 
         setupDataChannel();
 
-        const offer =
-          await peerConnection.createOffer();
 
-        await peerConnection.setLocalDescription(
-          offer
-        );
+        const offer =
+          await peerConnection
+            .createOffer();
+
+
+        await peerConnection
+          .setLocalDescription(
+            offer
+          );
+
 
         await waitForIceGathering(
           peerConnection
         );
 
+
         const localDescription =
-          peerConnection.localDescription;
+          peerConnection
+            .localDescription;
+
 
         if (
           !localDescription ||
           !localDescription.sdp
         ) {
           throw new Error(
-            "SDP offer dari browser tidak tersedia."
+            "SDP offer browser tidak tersedia."
           );
         }
+
 
         const realtimeResponse =
           await fetch(
@@ -328,8 +404,10 @@
             }
           );
 
+
         const realtimeBody =
           await realtimeResponse.text();
+
 
         if (!realtimeResponse.ok) {
           throw new Error(
@@ -339,6 +417,7 @@
           );
         }
 
+
         if (
           !realtimeBody ||
           !realtimeBody
@@ -346,26 +425,29 @@
             .startsWith("v=0")
         ) {
           throw new Error(
-            "Respons OpenAI bukan SDP answer yang valid."
+            "Respons Realtime bukan SDP answer yang valid."
           );
         }
 
-        await peerConnection.setRemoteDescription({
-          type: "answer",
-          sdp: realtimeBody
-        });
+
+        await peerConnection
+          .setRemoteDescription({
+            type: "answer",
+            sdp: realtimeBody
+          });
+
 
         setStatus(
-          "Koneksi suara dibuat. Menunggu saluran AI..."
+          "Koneksi dibuat. Menunggu saluran transkripsi..."
         );
 
       } catch (error) {
         console.error(
-          "Gagal memulai asisten:",
+          "Gagal memulai:",
           error
         );
 
-        const errorMessage =
+        const message =
           getReadableError(error);
 
         stopAssistant({
@@ -373,7 +455,7 @@
         });
 
         setStatus(
-          errorMessage,
+          message,
           "error"
         );
 
@@ -392,8 +474,9 @@
         return;
       }
 
+
       dataChannel.onopen =
-        function() {
+        async function() {
           if (running) {
             return;
           }
@@ -405,18 +488,24 @@
           stopButton.disabled = false;
 
           detailsBox.textContent =
-            "Saluran OpenAI terhubung.";
+            "Transkripsi OpenAI terhubung.";
 
           setStatus(
-            "Asisten aktif. Menunggu jadwal.",
+            "Asisten aktif.",
             "success"
           );
 
-          speakExact(
+          /*
+           * Pembuka dibacakan oleh TTS,
+           * bukan oleh Realtime.
+           */
+          await speakExact(
             "Asisten alarm sudah aktif."
           );
 
-          pollReminder();
+          if (running) {
+            pollReminder();
+          }
         };
 
 
@@ -448,7 +537,7 @@
           );
 
           setStatus(
-            "Terjadi kesalahan pada saluran AI.",
+            "Saluran transkripsi mengalami kesalahan.",
             "error"
           );
         };
@@ -463,12 +552,13 @@
           running = false;
 
           clearPollTimer();
+          cancelTts();
 
           startButton.disabled = false;
           stopButton.disabled = true;
 
           setStatus(
-            "Saluran AI terputus.",
+            "Saluran transkripsi terputus.",
             "error"
           );
         };
@@ -481,7 +571,8 @@
       }
 
       const state =
-        peerConnection.connectionState;
+        peerConnection
+          .connectionState;
 
       console.log(
         "Connection state:",
@@ -490,13 +581,13 @@
 
       if (state === "connecting") {
         setStatus(
-          "Menghubungkan suara..."
+          "Menghubungkan transkripsi..."
         );
       }
 
       if (state === "connected") {
         setStatus(
-          "Koneksi suara terhubung. Menyiapkan saluran AI..."
+          "Koneksi suara terhubung."
         );
       }
 
@@ -526,6 +617,10 @@
         event.type
       );
 
+
+      /*
+       * Hanya proses hasil transkripsi.
+       */
       if (
         event.type ===
         "conversation.item.input_audio_transcription.completed"
@@ -536,6 +631,19 @@
           ).trim();
 
         if (!transcript) {
+          return;
+        }
+
+        /*
+         * Jangan proses transkripsi saat
+         * TTS masih berbicara.
+         */
+        if (ttsPlaying) {
+          console.log(
+            "Transkripsi diabaikan karena TTS sedang berbicara:",
+            transcript
+          );
+
           return;
         }
 
@@ -562,46 +670,23 @@
       }
 
 
+      /*
+       * Jika Realtime tetap mencoba menghasilkan
+       * audio karena suatu konfigurasi lama,
+       * jangan putar audionya.
+       */
       if (
         event.type ===
-        "response.output_audio_transcript.done"
+        "response.created"
       ) {
-        const aiTranscript =
-          String(
-            event.transcript || ""
-          ).trim();
-
-        if (aiTranscript) {
-          transcriptBox.textContent +=
-            "\nAI: " +
-            aiTranscript;
-        }
-      }
-
-
-      if (event.type === "response.done") {
-        const responseStatus =
-          event.response &&
-          event.response.status;
-
-        if (responseStatus === "failed") {
-          const message =
-            event.response &&
-            event.response.status_details &&
-            event.response.status_details.error &&
-            event.response.status_details.error.message;
-
-          setStatus(
-            message ||
-            "Respons suara OpenAI gagal.",
-            "error"
-          );
-        }
+        console.warn(
+          "Realtime mencoba membuat respons. Audio tetap dibisukan."
+        );
       }
 
 
       if (event.type === "error") {
-        const errorMessage =
+        const message =
           event.error &&
           event.error.message
             ? event.error.message
@@ -613,7 +698,7 @@
         );
 
         setStatus(
-          errorMessage,
+          message,
           "error"
         );
       }
@@ -653,7 +738,10 @@
 
         try {
           data =
-            JSON.parse(responseText);
+            JSON.parse(
+              responseText
+            );
+
         } catch (error) {
           throw new Error(
             "Endpoint jadwal tidak mengembalikan JSON."
@@ -676,23 +764,42 @@
 
           detailsBox.textContent =
             "Alarm aktif: " +
-            activeReminder.name +
+            String(
+              activeReminder.name || "-"
+            ) +
             " • " +
-            activeReminder.time +
+            String(
+              activeReminder.time || "-"
+            ) +
             " • tahap " +
-            activeReminder.stage;
-
-          setStatus(
-            "Alarm sedang dibacakan."
-          );
+            String(
+              activeReminder.stage || "-"
+            );
 
           transcriptBox.textContent =
             "AI: " +
-            activeReminder.prompt;
+            String(
+              activeReminder.prompt || ""
+            );
 
-          speakExact(
+          setStatus(
+            "Alarm sedang dibacakan.",
+            "speaking"
+          );
+
+          await speakExact(
             activeReminder.prompt
           );
+
+          if (
+            running &&
+            activeReminder
+          ) {
+            setStatus(
+              "Silakan jawab melalui mikrofon.",
+              "success"
+            );
+          }
 
         } else if (!activeReminder) {
           await updateSummary();
@@ -700,7 +807,7 @@
 
       } catch (error) {
         console.error(
-          "Polling jadwal gagal:",
+          "Polling gagal:",
           error
         );
 
@@ -731,7 +838,13 @@
         return;
       }
 
+      /*
+       * Hapus sementara agar jawaban
+       * tidak dikirim dua kali.
+       */
       activeReminder = null;
+
+      setMicrophoneEnabled(false);
 
       setStatus(
         "Memproses jawaban..."
@@ -751,8 +864,10 @@
 
               body: JSON.stringify({
                 action: "answer",
+
                 reminderId:
                   reminder.id,
+
                 transcript:
                   transcript
               })
@@ -774,7 +889,10 @@
 
         try {
           data =
-            JSON.parse(responseText);
+            JSON.parse(
+              responseText
+            );
+
         } catch (error) {
           throw new Error(
             "Jawaban server bukan JSON yang valid."
@@ -788,22 +906,32 @@
           );
         }
 
+        const reply =
+          String(
+            data.reply ||
+            "Jawaban sudah disimpan."
+          );
+
         setStatus(
-          data.reply,
+          reply,
           data.action === "unknown"
             ? ""
             : "success"
         );
 
-        speakExact(
-          data.reply
+        transcriptBox.textContent +=
+          "\nAI: " +
+          reply;
+
+        await speakExact(
+          reply
         );
 
         await updateSummary();
 
       } catch (error) {
         console.error(
-          "Jawaban gagal diproses:",
+          "Jawaban gagal:",
           error
         );
 
@@ -815,11 +943,23 @@
           getReadableError(error),
           "error"
         );
+
+      } finally {
+        if (
+          running &&
+          !ttsPlaying
+        ) {
+          setMicrophoneEnabled(true);
+        }
       }
     }
 
 
-    function speakExact(text) {
+    /*
+     * Semua suara alarm menggunakan /api/tts.
+     * Tidak ada response.create ke Realtime.
+     */
+    async function speakExact(text) {
       const cleanText =
         String(text || "").trim();
 
@@ -827,60 +967,168 @@
         return;
       }
 
-      if (
-        !dataChannel ||
-        dataChannel.readyState !== "open"
-      ) {
-        console.warn(
-          "Saluran AI belum terbuka."
+      const currentToken =
+        ++ttsToken;
+
+      cleanupTtsAudio();
+
+      ttsPlaying = true;
+      setMicrophoneEnabled(false);
+
+      try {
+        const response =
+          await fetch(
+            "/api/tts",
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json; charset=utf-8"
+              },
+
+              body: JSON.stringify({
+                text: cleanText
+              })
+            }
+          );
+
+        if (!response.ok) {
+          const errorText =
+            await response.text();
+
+          throw new Error(
+            formatServerError(
+              errorText
+            )
+          );
+        }
+
+        const audioBlob =
+          await response.blob();
+
+        /*
+         * Ada permintaan TTS lebih baru.
+         */
+        if (
+          currentToken !== ttsToken
+        ) {
+          return;
+        }
+
+        ttsObjectUrl =
+          URL.createObjectURL(
+            audioBlob
+          );
+
+        ttsAudio =
+          new Audio(
+            ttsObjectUrl
+          );
+
+        ttsAudio.preload = "auto";
+
+        await new Promise(
+          function(resolve, reject) {
+            ttsAudio.onended =
+              function() {
+                resolve();
+              };
+
+            ttsAudio.onerror =
+              function() {
+                reject(
+                  new Error(
+                    "Audio TTS gagal diputar."
+                  )
+                );
+              };
+
+            ttsAudio
+              .play()
+              .catch(reject);
+          }
         );
 
+      } catch (error) {
+        console.error(
+          "TTS gagal:",
+          error
+        );
+
+        setStatus(
+          "Gagal membacakan suara: " +
+          getReadableError(error),
+          "error"
+        );
+
+      } finally {
+        if (
+          currentToken === ttsToken
+        ) {
+          cleanupTtsAudio();
+
+          ttsPlaying = false;
+
+          if (running) {
+            setMicrophoneEnabled(true);
+          }
+        }
+      }
+    }
+
+
+    function cancelTts() {
+      ttsToken++;
+      ttsPlaying = false;
+
+      cleanupTtsAudio();
+
+      if (running) {
+        setMicrophoneEnabled(true);
+      }
+    }
+
+
+    function cleanupTtsAudio() {
+      if (ttsAudio) {
+        try {
+          ttsAudio.pause();
+          ttsAudio.currentTime = 0;
+        } catch (error) {
+          console.warn(error);
+        }
+
+        ttsAudio.onended = null;
+        ttsAudio.onerror = null;
+        ttsAudio = null;
+      }
+
+      if (ttsObjectUrl) {
+        URL.revokeObjectURL(
+          ttsObjectUrl
+        );
+
+        ttsObjectUrl = null;
+      }
+    }
+
+
+    /*
+     * Mikrofon dimatikan sementara saat TTS berbicara.
+     * Ini mencegah AI mendengar suara alarmnya sendiri.
+     */
+    function setMicrophoneEnabled(enabled) {
+      if (!localStream) {
         return;
       }
 
-      const event = {
-        type: "response.create",
-
-        response: {
-          conversation: "none",
-
-          output_modalities: [
-            "audio"
-          ],
-
-          audio: {
-            output: {
-              voice: "cedar"
-            }
-          },
-
-          instructions: [
-            "Berbicara hanya dalam bahasa Indonesia.",
-            "Gunakan pengucapan bahasa Indonesia yang netral dan jelas.",
-            "Bacakan isi pesan pengguna persis seperti yang tertulis.",
-            "Jangan menerjemahkan.",
-            "Jangan menambahkan kata apa pun."
-          ].join(" "),
-
-          input: [
-            {
-              type: "message",
-              role: "user",
-
-              content: [
-                {
-                  type: "input_text",
-                  text: cleanText
-                }
-              ]
-            }
-          ]
-        }
-      };
-
-      dataChannel.send(
-        JSON.stringify(event)
-      );
+      localStream
+        .getAudioTracks()
+        .forEach(function(track) {
+          track.enabled =
+            Boolean(enabled);
+        });
     }
 
 
@@ -908,7 +1156,9 @@
         }
 
         const data =
-          JSON.parse(responseText);
+          JSON.parse(
+            responseText
+          );
 
         if (!data.ok) {
           throw new Error(
@@ -919,11 +1169,17 @@
 
         detailsBox.textContent =
           "Status CLOSE: " +
-          data.closeCount +
+          String(
+            data.closeCount ?? "-"
+          ) +
           " • Terlambat: " +
-          data.overdueCount +
+          String(
+            data.overdueCount ?? "-"
+          ) +
           " • Server: " +
-          data.serverTime;
+          String(
+            data.serverTime || "-"
+          );
 
       } catch (error) {
         console.error(
@@ -943,6 +1199,7 @@
       activeReminder = null;
 
       clearPollTimer();
+      cancelTts();
 
       if (dataChannel) {
         try {
@@ -991,7 +1248,10 @@
 
     function clearPollTimer() {
       if (pollTimer) {
-        clearTimeout(pollTimer);
+        clearTimeout(
+          pollTimer
+        );
+
         pollTimer = null;
       }
     }
@@ -999,7 +1259,8 @@
 
     function waitForIceGathering(pc) {
       if (
-        pc.iceGatheringState === "complete"
+        pc.iceGatheringState ===
+        "complete"
       ) {
         return Promise.resolve();
       }
@@ -1037,6 +1298,9 @@
             checkState
           );
 
+          /*
+           * Jangan menunggu ICE selamanya.
+           */
           setTimeout(
             finish,
             5000
@@ -1053,26 +1317,40 @@
         );
       }
 
-      if (error.name === "NotAllowedError") {
+      if (
+        error.name ===
+        "NotAllowedError"
+      ) {
         return (
           "Izin mikrofon ditolak. " +
-          "Buka pengaturan situs Chrome lalu izinkan mikrofon."
+          "Izinkan mikrofon melalui pengaturan situs browser."
         );
       }
 
-      if (error.name === "NotFoundError") {
-        return "Mikrofon tidak ditemukan.";
+      if (
+        error.name ===
+        "NotFoundError"
+      ) {
+        return (
+          "Mikrofon tidak ditemukan."
+        );
       }
 
-      if (error.name === "NotReadableError") {
+      if (
+        error.name ===
+        "NotReadableError"
+      ) {
         return (
           "Mikrofon sedang digunakan aplikasi lain."
         );
       }
 
-      if (error.name === "AbortError") {
+      if (
+        error.name ===
+        "AbortError"
+      ) {
         return (
-          "Akses mikrofon atau koneksi dibatalkan."
+          "Proses dibatalkan oleh browser."
         );
       }
 
@@ -1089,7 +1367,7 @@
 
       if (!raw) {
         return (
-          "Server tidak memberikan pesan error."
+          "Server tidak memberikan pesan kesalahan."
         );
       }
 
@@ -1099,11 +1377,14 @@
 
         if (
           parsed.details &&
-          typeof parsed.details === "string"
+          typeof parsed.details ===
+            "string"
         ) {
           try {
             const details =
-              JSON.parse(parsed.details);
+              JSON.parse(
+                parsed.details
+              );
 
             return (
               details.error &&
@@ -1143,7 +1424,9 @@
       statusBox.className = "";
 
       if (type) {
-        statusBox.classList.add(type);
+        statusBox.classList.add(
+          type
+        );
       }
     }
 
