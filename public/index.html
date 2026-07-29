@@ -445,12 +445,58 @@
           /*
            * Kalimat pembuka dalam bahasa Indonesia.
            */
-          speakExact(
-            "Asisten alarm sudah aktif."
-          );
+          function speakExact(text) {
+  const cleanText = String(text || "").trim();
 
-          pollReminder();
-        };
+  if (!cleanText) {
+    return;
+  }
+
+  if (
+    !dataChannel ||
+    dataChannel.readyState !== "open"
+  ) {
+    console.warn("Saluran AI belum terbuka.");
+    return;
+  }
+
+  const realtimeEvent = {
+    type: "response.create",
+
+    response: {
+      conversation: "none",
+
+      output_modalities: [
+        "audio"
+      ],
+
+      instructions: [
+        "Gunakan pelafalan bahasa Indonesia yang netral dan alami.",
+        "Bacakan teks pengguna persis seperti tertulis.",
+        "Jangan diterjemahkan.",
+        "Jangan menambah kata apa pun."
+      ].join(" "),
+
+      input: [
+        {
+          type: "message",
+          role: "user",
+
+          content: [
+            {
+              type: "input_text",
+              text: cleanText
+            }
+          ]
+        }
+      ]
+    }
+  };
+
+  dataChannel.send(
+    JSON.stringify(realtimeEvent)
+  );
+}
 
 
       dataChannel.onmessage =
