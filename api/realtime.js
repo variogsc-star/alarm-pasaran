@@ -24,31 +24,28 @@ export default async function handler(req, res) {
   }
 
   try {
-    let sdp = "";
-
-    if (typeof req.body === "string") {
-      sdp = req.body;
-    } else if (Buffer.isBuffer(req.body)) {
-      sdp = req.body.toString("utf8");
-    } else if (
-      req.body &&
-      typeof req.body.sdp === "string"
-    ) {
-      sdp = req.body.sdp;
-    }
-
-    sdp = normalizeSdp(sdp);
+    const rawSdp = readSdpBody(req);
+    const sdp = normalizeSdp(rawSdp);
 
     if (!sdp.startsWith("v=0\r\n")) {
       return res.status(400).json({
         ok: false,
-        error: "SDP offer tidak valid atau tidak ditemukan.",
-        contentType: req.headers["content-type"] || "",
-        receivedType: typeof req.body,
-        preview: sdp.substring(0, 100)
+        error: "SDP offer tidak valid.",
+        contentType:
+          req.headers["content-type"] || "",
+        preview:
+          sdp.substring(0, 120)
       });
     }
 
+    /*
+     * Realtime hanya dipakai untuk mendengar
+     * dan mentranskripsikan suara pengguna.
+     *
+     * create_response dibuat false agar model
+     * tidak menjawab dengan suara Inggris,
+     * Rusia, atau bahasa lainnya.
+     */
     const session = {
       type: "realtime",
       model: "gpt-realtime",
@@ -58,26 +55,26 @@ export default async function handler(req, res) {
       ],
 
       instructions: [
-        "Kamu adalah asisten alarm suara.",
-        "Selalu berbicara menggunakan bahasa Indonesia.",
-        "Jangan menggunakan bahasa Inggris, Rusia, atau bahasa lain.",
-        "Gunakan pengucapan bahasa Indonesia yang jelas, netral, dan alami.",
-        "Jawaban harus singkat dan tegas.",
-        "Saat menerima teks alarm, bacakan teks tersebut persis.",
-        "Jangan menerjemahkan nama jadwal.",
-        "Jangan menambahkan salam, penjelasan, pembukaan, atau penutup."
+        "Kamu adalah sistem transkripsi alarm.",
+        "Jangan membuat jawaban suara otomatis.",
+        "Ucapan pengguna menggunakan bahasa Indonesia.",
+        "Fokus mengenali jawaban singkat mengenai status jadwal."
       ].join(" "),
 
       audio: {
         input: {
           transcription: {
-            model: "gpt-4o-mini-transcribe",
+            model:
+              "gpt-4o-mini-transcribe",
+
             language: "id",
 
             prompt: [
-              "Ucapan menggunakan bahasa Indonesia.",
-              "Kata yang sering digunakan:",
-              "sudah, udah, gangguan, diundur, libur, buka, belum, jadwal, dan alarm."
+              "Transkripsikan ucapan sebagai bahasa Indonesia.",
+              "Kosakata yang sering muncul:",
+              "sudah, udah, belum, gangguan,",
+              "diundur, libur, buka, tutup,",
+              "jadwal, alarm, selesai, dan batal."
             ].join(" ")
           },
 
@@ -87,26 +84,47 @@ export default async function handler(req, res) {
 
           turn_detection: {
             type: "server_vad",
+
+            /*
+             * Sangat penting.
+             * Jangan izinkan Realtime menjawab.
+             */
             create_response: false,
-            interrupt_response: true,
-            silence_duration_ms: 700,
-            prefix_padding_ms: 300
+
+            /*
+             * Karena tidak ada respons AI Realtime,
+             * tidak perlu menginterupsi respons.
+             */
+            interrupt_response: false,
+
+            prefix_padding_ms: 300,
+            silence_duration_ms: 700
           }
         },
 
         output: {
+          /*
+           * Tidak digunakan untuk alarm.
+           * Suara alarm datang dari /api/tts.
+           */
           voice: "cedar"
         }
       },
 
-      max_output_tokens: 250
+      max_output_tokens: 100
     };
 
     const formData = new FormData();
 
     formData.append(
       "sdp",
-      sdp
+      new Blob(
+        [sdp],
+        {
+          type: "application/sdp"
+        }
+      ),
+      "offer.sdp"
     );
 
     formData.append(
@@ -120,25 +138,27 @@ export default async function handler(req, res) {
       "session.json"
     );
 
-    const openAIResponse = await fetch(
-      "https://api.openai.com/v1/realtime/calls?model=gpt-realtime",
-      {
-        method: "POST",
+    const openAIResponse =
+      await fetch(
+        "https://api.openai.com/v1/realtime/calls",
+        {
+          method: "POST",
 
-        headers: {
-          Authorization: `Bearer ${apiKey}`
-        },
+          headers: {
+            Authorization:
+              `Bearer ${apiKey}`
+          },
 
-        body: formData
-      }
-    );
+          body: formData
+        }
+      );
 
     const responseBody =
       await openAIResponse.text();
 
     if (!openAIResponse.ok) {
       console.error(
-        "OpenAI Realtime error:",
+        "OpenAI Realtime gagal:",
         openAIResponse.status,
         responseBody
       );
@@ -147,15 +167,20 @@ export default async function handler(req, res) {
         .status(openAIResponse.status)
         .json({
           ok: false,
-          error: "OpenAI Realtime gagal.",
-          status: openAIResponse.status,
-          details: responseBody
+          error:
+            "OpenAI Realtime gagal.",
+          status:
+            openAIResponse.status,
+          details:
+            responseBody
         });
     }
 
     if (
       !responseBody ||
-      !responseBody.trim().startsWith("v=0")
+      !responseBody
+        .trim()
+        .startsWith("v=0")
     ) {
       return res.status(502).json({
         ok: false,
@@ -188,7 +213,8 @@ export default async function handler(req, res) {
 
     return res.status(500).json({
       ok: false,
-      error: "Kesalahan server Realtime.",
+      error:
+        "Kesalahan server Realtime.",
       details:
         error instanceof Error
           ? error.message
@@ -198,10 +224,31 @@ export default async function handler(req, res) {
 }
 
 
+function readSdpBody(req) {
+  if (typeof req.body === "string") {
+    return req.body;
+  }
+
+  if (Buffer.isBuffer(req.body)) {
+    return req.body.toString("utf8");
+  }
+
+  if (
+    req.body &&
+    typeof req.body.sdp === "string"
+  ) {
+    return req.body.sdp;
+  }
+
+  return "";
+}
+
+
 function normalizeSdp(value) {
-  const normalized = String(value || "")
-    .replace(/\r?\n/g, "\r\n")
-    .replace(/(\r\n)+$/, "");
+  const normalized =
+    String(value || "")
+      .replace(/\r?\n/g, "\r\n")
+      .replace(/(\r\n)+$/, "");
 
   return normalized + "\r\n";
 }
