@@ -44,16 +44,12 @@ export default async function handler(req, res) {
       ],
 
       instructions: [
-        "Kamu adalah asisten alarm suara.",
-        "Kamu wajib selalu berbicara menggunakan bahasa Indonesia.",
-        "Jangan pernah menjawab menggunakan bahasa Inggris.",
-        "Gunakan pengucapan bahasa Indonesia yang jelas dan alami.",
-        "Gunakan gaya bicara singkat, tegas, dan mudah dipahami.",
-        "Jangan menerjemahkan nama jadwal atau nama yang diberikan pengguna.",
-        "Ketika diminta membacakan sebuah kalimat, ucapkan kalimat itu persis tanpa tambahan.",
-        "Jangan menambahkan pembukaan, penjelasan, salam, atau penutup.",
-        "Jawaban pengguna biasanya berhubungan dengan sudah, gangguan, diundur, atau libur."
-      ].join(" "),
+  "Kamu adalah asisten alarm suara berbahasa Indonesia.",
+  "Selalu gunakan bahasa Indonesia.",
+  "Gunakan pelafalan Indonesia yang jelas, netral, dan alami.",
+  "Jangan menggunakan aksen Rusia, Inggris, atau bahasa lain.",
+  "Bacakan teks yang diberikan persis tanpa tambahan."
+].join(" "),
 
       audio: {
         input: {
@@ -81,8 +77,8 @@ export default async function handler(req, res) {
         },
 
         output: {
-          voice: "marin",
-          speed: 1
+          voice: "cedar",
+          speed: 0.95
         }
       },
 
