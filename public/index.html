@@ -21,18 +21,27 @@
       display: grid;
       place-items: center;
       padding: 18px;
+
       background: #f3f4f6;
       color: #111827;
-      font-family: Arial, sans-serif;
+
+      font-family:
+        Arial,
+        sans-serif;
     }
 
     .card {
       width: 100%;
       max-width: 560px;
+
       padding: 22px;
       border-radius: 18px;
+
       background: #ffffff;
-      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.1);
+
+      box-shadow:
+        0 12px 35px
+        rgba(0, 0, 0, 0.1);
     }
 
     h1 {
@@ -48,8 +57,11 @@
       margin: 18px 0;
       min-height: 62px;
       padding: 14px;
+
       border-radius: 12px;
+
       background: #eef2ff;
+
       line-height: 1.5;
       overflow-wrap: anywhere;
     }
@@ -71,11 +83,14 @@
 
     button {
       width: 100%;
+      padding: 15px;
+
       border: 0;
       border-radius: 12px;
-      padding: 15px;
+
       font-size: 16px;
       font-weight: 700;
+
       cursor: pointer;
     }
 
@@ -97,9 +112,12 @@
     #details,
     #transcript {
       margin-top: 14px;
+
       color: #4b5563;
+
       font-size: 14px;
       line-height: 1.5;
+
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
@@ -128,7 +146,10 @@
         Mulai Asisten
       </button>
 
-      <button id="stopButton" disabled>
+      <button
+        id="stopButton"
+        disabled
+      >
         Hentikan
       </button>
     </div>
@@ -148,22 +169,34 @@
     const POLL_MS = 20000;
 
     const startButton =
-      document.getElementById("startButton");
+      document.getElementById(
+        "startButton"
+      );
 
     const stopButton =
-      document.getElementById("stopButton");
+      document.getElementById(
+        "stopButton"
+      );
 
     const statusBox =
-      document.getElementById("status");
+      document.getElementById(
+        "status"
+      );
 
     const detailsBox =
-      document.getElementById("details");
+      document.getElementById(
+        "details"
+      );
 
     const transcriptBox =
-      document.getElementById("transcript");
+      document.getElementById(
+        "transcript"
+      );
 
     const remoteAudio =
-      document.getElementById("remoteAudio");
+      document.getElementById(
+        "remoteAudio"
+      );
 
     let running = false;
     let starting = false;
@@ -171,6 +204,7 @@
     let peerConnection = null;
     let dataChannel = null;
     let localStream = null;
+
     let pollTimer = null;
     let activeReminder = null;
 
@@ -184,7 +218,8 @@
       "click",
       function() {
         stopAssistant({
-          message: "Asisten dihentikan.",
+          message:
+            "Asisten dihentikan.",
           preserveStatus: false
         });
       }
@@ -197,11 +232,16 @@
       }
 
       starting = true;
+
       startButton.disabled = true;
       stopButton.disabled = true;
 
       clearPollTimer();
+
       activeReminder = null;
+
+      detailsBox.textContent = "";
+      transcriptBox.textContent = "";
 
       setStatus(
         "Meminta izin mikrofon..."
@@ -218,13 +258,14 @@
         }
 
         localStream =
-          await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          });
+          await navigator.mediaDevices
+            .getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
 
         setStatus(
           "Mikrofon aktif. Menghubungkan OpenAI..."
@@ -242,22 +283,24 @@
               remoteAudio.srcObject =
                 event.streams[0];
 
-              remoteAudio.play().catch(
-                function(error) {
+              remoteAudio
+                .play()
+                .catch(function(error) {
                   console.warn(
                     "Audio belum dapat diputar:",
                     error
                   );
-                }
-              );
+                });
             }
           };
 
-        peerConnection.onconnectionstatechange =
-          handleConnectionStateChange;
+        peerConnection
+          .onconnectionstatechange =
+            handleConnectionStateChange;
 
-        peerConnection.oniceconnectionstatechange =
-          handleIceConnectionStateChange;
+        peerConnection
+          .oniceconnectionstatechange =
+            handleIceConnectionStateChange;
 
         localStream
           .getTracks()
@@ -278,9 +321,10 @@
         const offer =
           await peerConnection.createOffer();
 
-        await peerConnection.setLocalDescription(
-          offer
-        );
+        await peerConnection
+          .setLocalDescription(
+            offer
+          );
 
         await waitForIceGathering(
           peerConnection
@@ -307,7 +351,9 @@
               },
 
               body:
-                peerConnection.localDescription.sdp
+                peerConnection
+                  .localDescription
+                  .sdp
             }
           );
 
@@ -316,23 +362,28 @@
 
         if (!realtimeResponse.ok) {
           throw new Error(
-            formatServerError(realtimeBody)
+            formatServerError(
+              realtimeBody
+            )
           );
         }
 
         if (
           !realtimeBody ||
-          !realtimeBody.trim().startsWith("v=0")
+          !realtimeBody
+            .trim()
+            .startsWith("v=0")
         ) {
           throw new Error(
             "Respons OpenAI bukan SDP answer yang valid."
           );
         }
 
-        await peerConnection.setRemoteDescription({
-          type: "answer",
-          sdp: realtimeBody
-        });
+        await peerConnection
+          .setRemoteDescription({
+            type: "answer",
+            sdp: realtimeBody
+          });
 
         setStatus(
           "Koneksi suara dibuat. Menunggu saluran AI..."
@@ -391,6 +442,9 @@
             "success"
           );
 
+          /*
+           * Kalimat pembuka dalam bahasa Indonesia.
+           */
           speakExact(
             "Asisten alarm sudah aktif."
           );
@@ -398,13 +452,18 @@
           pollReminder();
         };
 
+
       dataChannel.onmessage =
         function(event) {
           try {
             const message =
-              JSON.parse(event.data);
+              JSON.parse(
+                event.data
+              );
 
-            handleRealtimeEvent(message);
+            handleRealtimeEvent(
+              message
+            );
 
           } catch (error) {
             console.error(
@@ -414,6 +473,7 @@
             );
           }
         };
+
 
       dataChannel.onerror =
         function(error) {
@@ -428,14 +488,19 @@
           );
         };
 
+
       dataChannel.onclose =
         function() {
           if (running) {
             running = false;
+
             clearPollTimer();
 
-            startButton.disabled = false;
-            stopButton.disabled = true;
+            startButton.disabled =
+              false;
+
+            stopButton.disabled =
+              true;
 
             setStatus(
               "Saluran AI terputus.",
@@ -494,7 +559,8 @@
 
       console.log(
         "ICE state:",
-        peerConnection.iceConnectionState
+        peerConnection
+          .iceConnectionState
       );
     }
 
@@ -523,7 +589,8 @@
         }
 
         transcriptBox.textContent =
-          "Kamu: " + transcript;
+          "Kamu: " +
+          transcript;
 
         if (activeReminder) {
           submitReminderAnswer(
@@ -531,6 +598,7 @@
           );
         }
       }
+
 
       if (
         event.type ===
@@ -541,6 +609,7 @@
           "error"
         );
       }
+
 
       if (
         event.type ===
@@ -558,15 +627,18 @@
         }
       }
 
+
       if (
         event.type ===
         "response.done"
       ) {
-        const status =
+        const responseStatus =
           event.response &&
           event.response.status;
 
-        if (status === "failed") {
+        if (
+          responseStatus === "failed"
+        ) {
           const message =
             event.response &&
             event.response.status_details &&
@@ -580,6 +652,7 @@
           );
         }
       }
+
 
       if (event.type === "error") {
         const errorMessage =
@@ -624,7 +697,9 @@
 
         if (!response.ok) {
           throw new Error(
-            formatServerError(responseText)
+            formatServerError(
+              responseText
+            )
           );
         }
 
@@ -632,11 +707,12 @@
 
         try {
           data =
-            JSON.parse(responseText);
+            JSON.parse(
+              responseText
+            );
         } catch (error) {
           throw new Error(
-            "Endpoint jadwal tidak mengembalikan JSON. " +
-            "Periksa deployment Apps Script."
+            "Endpoint jadwal tidak mengembalikan JSON."
           );
         }
 
@@ -726,13 +802,15 @@
 
               headers: {
                 "Content-Type":
-                  "application/json"
+                  "application/json; charset=utf-8"
               },
 
               body: JSON.stringify({
                 action: "answer",
-                reminderId: reminder.id,
-                transcript: transcript
+                reminderId:
+                  reminder.id,
+                transcript:
+                  transcript
               })
             }
           );
@@ -742,7 +820,9 @@
 
         if (!response.ok) {
           throw new Error(
-            formatServerError(responseText)
+            formatServerError(
+              responseText
+            )
           );
         }
 
@@ -750,7 +830,9 @@
 
         try {
           data =
-            JSON.parse(responseText);
+            JSON.parse(
+              responseText
+            );
         } catch (error) {
           throw new Error(
             "Jawaban server bukan JSON yang valid."
@@ -797,7 +879,8 @@
 
     function speakExact(text) {
       const cleanText =
-        String(text || "").trim();
+        String(text || "")
+          .trim();
 
       if (!cleanText) {
         return;
@@ -805,7 +888,8 @@
 
       if (
         !dataChannel ||
-        dataChannel.readyState !== "open"
+        dataChannel.readyState !==
+          "open"
       ) {
         console.warn(
           "Saluran AI belum terbuka."
@@ -814,7 +898,27 @@
         return;
       }
 
-      const event = {
+      /*
+       * JSON.stringify dipakai supaya tanda kutip
+       * di dalam teks tidak merusak instruksi.
+       */
+      const quotedText =
+        JSON.stringify(
+          cleanText
+        );
+
+      const instruction = [
+        "Gunakan bahasa Indonesia saja.",
+        "Jangan menggunakan bahasa Inggris.",
+        "Ucapkan teks berikut persis seperti yang tertulis.",
+        "Jangan menerjemahkan teks.",
+        "Jangan menambahkan kata, salam, penjelasan, atau penutup.",
+        "Gunakan pelafalan bahasa Indonesia yang jelas dan alami.",
+        "Teks yang wajib diucapkan:",
+        quotedText
+      ].join(" ");
+
+      const realtimeEvent = {
         type: "response.create",
 
         response: {
@@ -825,14 +929,14 @@
           ],
 
           instructions:
-            "Ucapkan persis kalimat berikut " +
-            "dalam bahasa Indonesia tanpa tambahan apa pun: " +
-            cleanText
+            instruction
         }
       };
 
       dataChannel.send(
-        JSON.stringify(event)
+        JSON.stringify(
+          realtimeEvent
+        )
       );
     }
 
@@ -854,12 +958,16 @@
 
         if (!response.ok) {
           throw new Error(
-            formatServerError(responseText)
+            formatServerError(
+              responseText
+            )
           );
         }
 
         const data =
-          JSON.parse(responseText);
+          JSON.parse(
+            responseText
+          );
 
         if (!data.ok) {
           throw new Error(
@@ -918,9 +1026,11 @@
       if (localStream) {
         localStream
           .getTracks()
-          .forEach(function(track) {
-            track.stop();
-          });
+          .forEach(
+            function(track) {
+              track.stop();
+            }
+          );
 
         localStream = null;
       }
@@ -942,7 +1052,10 @@
 
     function clearPollTimer() {
       if (pollTimer) {
-        clearTimeout(pollTimer);
+        clearTimeout(
+          pollTimer
+        );
+
         pollTimer = null;
       }
     }
@@ -950,7 +1063,8 @@
 
     function waitForIceGathering(pc) {
       if (
-        pc.iceGatheringState === "complete"
+        pc.iceGatheringState ===
+        "complete"
       ) {
         return Promise.resolve();
       }
@@ -976,7 +1090,8 @@
 
           function checkState() {
             if (
-              pc.iceGatheringState === "complete"
+              pc.iceGatheringState ===
+              "complete"
             ) {
               finish();
             }
@@ -998,11 +1113,14 @@
 
     function getReadableError(error) {
       if (!error) {
-        return "Terjadi kesalahan yang tidak diketahui.";
+        return (
+          "Terjadi kesalahan yang tidak diketahui."
+        );
       }
 
       if (
-        error.name === "NotAllowedError"
+        error.name ===
+        "NotAllowedError"
       ) {
         return (
           "Izin mikrofon ditolak. " +
@@ -1011,13 +1129,17 @@
       }
 
       if (
-        error.name === "NotFoundError"
+        error.name ===
+        "NotFoundError"
       ) {
-        return "Mikrofon tidak ditemukan.";
+        return (
+          "Mikrofon tidak ditemukan."
+        );
       }
 
       if (
-        error.name === "NotReadableError"
+        error.name ===
+        "NotReadableError"
       ) {
         return (
           "Mikrofon sedang digunakan aplikasi lain."
@@ -1025,7 +1147,8 @@
       }
 
       if (
-        error.name === "AbortError"
+        error.name ===
+        "AbortError"
       ) {
         return (
           "Akses mikrofon dibatalkan oleh browser."
@@ -1041,10 +1164,13 @@
 
     function formatServerError(text) {
       const raw =
-        String(text || "").trim();
+        String(text || "")
+          .trim();
 
       if (!raw) {
-        return "Server tidak memberikan pesan error.";
+        return (
+          "Server tidak memberikan pesan error."
+        );
       }
 
       try {
@@ -1053,11 +1179,14 @@
 
         if (
           parsed.details &&
-          typeof parsed.details === "string"
+          typeof parsed.details ===
+            "string"
         ) {
           try {
             const details =
-              JSON.parse(parsed.details);
+              JSON.parse(
+                parsed.details
+              );
 
             return (
               details.error &&
@@ -1066,6 +1195,7 @@
                 : parsed.error ||
                   parsed.details
             );
+
           } catch (error) {
             return (
               parsed.error
@@ -1096,7 +1226,9 @@
       statusBox.className = "";
 
       if (type) {
-        statusBox.classList.add(type);
+        statusBox.classList.add(
+          type
+        );
       }
     }
 
